@@ -1,10 +1,13 @@
 #include <zuazo/Processors/Compositor.h>
 
+#include <zuazo/LayerData.h>
 #include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Graphics/Drawtable.h>
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
 #include <zuazo/Utils/Pool.h>
+#include <zuazo/Utils/StaticId.h>
+
 
 #include <memory>
 #include <vector>
@@ -64,7 +67,7 @@ struct CompositorImpl {
 			//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
 			std::stable_sort(
 				layers.begin(), layers.end(),
-				std::bind(&Open::layerDepthComp, *this, std::placeholders::_1, std::placeholders::_2)
+				std::bind(&Open::layerComp, *this, std::placeholders::_1, std::placeholders::_2)
 			);
 
 			//Obtain all the vulkan command buffers and add them as a dependency
@@ -94,27 +97,59 @@ struct CompositorImpl {
 		}
 
 	private:
-		bool layerDepthComp(const LayerData& a, const LayerData& b) {
+		bool layerComp(const LayerData& a, const LayerData& b) {
 			/*
-			 * This function will be called to sort the layers with std::sort(). Therefore, if it returns true
-			 * A will be placed before B.
-			 * 
-			 * The strategy will be the following: Opaque layers should be drawn backwards, in order to take advantage
-			 * of the Z-buffer test. Transparent layers should be drawn forwards, so that OIT issues are avoided. Opaque 
-			 * layers should be drawn before transparent ones.
-			 */
-			constexpr auto TRANSPARENT_STAGE = LayerData::RenderingStage::TRANSPARENT;
+			 * The strategy will be the following:
+			 * 1. Draw the BACKGROUND from bottom to top
+			 * 2. Draw the alphaless SCENE backwards, writing and testing depth
+			 * 3. Draw the transparent SCENE forwards, writing and testing depth
+			 * 4. Draw the FOREGROUND from bottom to top
+             */
+			
+			if(	a.getRenderingStage() == Compositor::RenderingStage::SCENE &&
+				b.getRenderingStage() == Compositor::RenderingStage::SCENE ) 
+			{
+				//Both are in the scene stage so transparency must be taken into consideration
+				assert(a.getRenderingStage() == b.getRenderingStage());
 
-			const auto& projMatrix = Math::Mat4x4f(); //TODO
-			auto depthA = (projMatrix * a.getAveragePosition()).z;
-			auto depthB = (projMatrix * b.getAveragePosition()).z;
+				if(a.getHasAlpha() != b.getHasAlpha()) {
+					//Prioritize alphaless drawing
+					return a.getHasAlpha() < b.getHasAlpha();
+				} else {
+					//Both or neither have alpha. Depth must be taken in consideration
+					assert(a.getHasAlpha() == b.getHasAlpha());
+					const auto hasAlpha = a.getHasAlpha();
 
-			//Swap depths if transparent rendering
-			if(a.getRenderingStage() == TRANSPARENT_STAGE && b.getRenderingStage() == TRANSPARENT_STAGE) {
-				std::swap(depthA, depthB);
+					//Calculate the average depth
+					const Math::Mat4x4f& projMatrix = Math::Mat4x4f();
+					const auto aDepth = (projMatrix * a.getAveragePosition()).z;
+					const auto bDepth = (projMatrix * b.getAveragePosition()).z;
+
+					return !hasAlpha
+						? aDepth < bDepth
+						: aDepth > bDepth;
+				}
+			} else {
+				//Just compare Rendering stages
+				return a.getRenderingStage() < b.getRenderingStage();
 			}
+		}
 
-			return std::forward_as_tuple(a.getRenderingStage(), depthA) < std::forward_as_tuple(b.getRenderingStage(), depthB);
+		bool layerCompStencil(const LayerData& a, const LayerData& b) {
+			/*
+			 * The strategy will be the following:
+			 * 1. Draw the alphaless FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
+			 * 2. Draw the alphaless SCENE backwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
+			 * 3. Draw the alphaless BACKGROUND from top to bottom, writing (0x00) and testing (GEQ) stencil
+			 * 4. Draw the transparent BACKGROUND from bottom to top, writing (0x00) and testing (GEQ) stencil
+			 * 5. Draw the transparent SCENE forwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
+			 * 6. Draw the transparent FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
+			 * 
+			 * //FIXME this technique wont preserve background and foreground layer ordering. Somehow layer # should be written
+			 * to the depth buffer so that the ordering is preserved. Depth buffer should be cleared from stage to stage.
+             */
+
+			assert(false); //TODO
 		}
 
 		static std::shared_ptr<vk::UniqueRenderPass> createRenderPass(	const Graphics::Vulkan& vulkan, 
@@ -131,6 +166,7 @@ struct CompositorImpl {
 	std::reference_wrapper<Compositor> 			owner;
 
 	vk::Format									depthStencilFormat;
+	Compositor::Camera							camera;
 
 	std::vector<LayerInput>						layerIns;
 	Output										videoOut;
@@ -156,8 +192,8 @@ struct CompositorImpl {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 
-		hasChanged = true;
-		update(); //Ensure that a frame is rendered
+		opened = Utils::makeUnique<Open>(); //TODO
+		hasChanged = true; //Signal rendering if needed
 	}
 
 	void close(ZuazoBase& base) {
@@ -166,7 +202,7 @@ struct CompositorImpl {
 		assert(&owner.get() == &compositor);
         
         videoOut.reset();
-
+		opened.reset();
 	}
 
 	void update() {
@@ -245,6 +281,88 @@ struct CompositorImpl {
 		return layerIns.size();
 	}
 
+	void setCamera(const Compositor::Camera& cam) {
+		camera = cam;
+		hasChanged = true;
+	}
+
+	const Compositor::Camera& getCamera() const {
+		return camera;
+	}
+
+
+
+	static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
+											const Compositor::FrameBufferFormat& fbFormat )
+	{
+		static std::unordered_map<size_t, Utils::StaticId> ids;
+		const size_t framebufferFormatIndex = 
+			static_cast<size_t>(fbFormat.colorFormat) << (sizeof(size_t) / 2 * Utils::getByteSize()) | 
+			static_cast<size_t>(fbFormat.depthStencilFormat); 
+		const auto id = ids[framebufferFormatIndex].get();
+
+		auto result = vulkan.createRenderPass(id);
+		if(!result) {
+			//Render pass was not created
+			const std::array attachments = {
+				vk::AttachmentDescription(
+					{},												//Flags
+					format,											//Attachemnt format
+					vk::SampleCountFlagBits::e1,					//Sample count
+					vk::AttachmentLoadOp::eClear,					//Color attachment load operation
+					vk::AttachmentStoreOp::eStore,					//Color attachemnt store operation
+					vk::AttachmentLoadOp::eDontCare,				//Stencil attachment load operation
+					vk::AttachmentStoreOp::eDontCare,				//Stencil attachment store operation
+					vk::ImageLayout::eUndefined,					//Initial layout
+					vk::ImageLayout::ePresentSrcKHR					//Final layout
+				)
+			};
+
+			constexpr std::array attachmentReferences = {
+				vk::AttachmentReference(
+					0, 												//Attachments index
+					vk::ImageLayout::eColorAttachmentOptimal 		//Attachemnt layout
+				)
+			};
+
+			const std::array subpasses = {
+				vk::SubpassDescription(
+					{},												//Flags
+					vk::PipelineBindPoint::eGraphics,				//Pipeline bind point
+					0, nullptr,										//Input attachments
+					attachmentReferences.size(), attachmentReferences.data(), //Color attachments
+					nullptr,										//Resolve attachemnts
+					nullptr,										//Depth / Stencil attachemnts
+					0, nullptr										//Preserve attachments
+				)
+			};
+
+			constexpr std::array subpassDependencies = {
+				vk::SubpassDependency(
+					VK_SUBPASS_EXTERNAL,							//Source subpass
+					0,												//Destination subpass
+					vk::PipelineStageFlagBits::eColorAttachmentOutput,//Source stage
+					vk::PipelineStageFlagBits::eColorAttachmentOutput,//Destination stage
+					{},												//Source access mask
+					vk::AccessFlagBits::eColorAttachmentRead | 		//Destintation access mask
+						vk::AccessFlagBits::eColorAttachmentWrite
+				)
+			};
+
+			const vk::RenderPassCreateInfo createInfo(
+				{},													//Flags
+				attachments.size(), attachments.data(),				//Attachemnts
+				subpasses.size(), subpasses.data(),					//Subpasses
+				subpassDependencies.size(), subpassDependencies.data()//Subpass dependencies
+			);
+
+			result = vulkan.createRenderPass(id, createInfo);
+		}
+
+		assert(result);
+		return result;
+	}
+
 private:
 	Output::PullCallback createPullCallback(CompositorImpl* impl) {
 		return [impl] (Output&) {
@@ -266,7 +384,7 @@ Compositor::Compositor(	Instance& instance,
 	: Utils::Pimpl<CompositorImpl>({}, *this)
 	, ZuazoBase(instance, 
 				std::move(name),
-				{ (*this)->videoOut },
+				PadRef((*this)->videoOut),
 				std::bind(&CompositorImpl::moved, std::ref(**this), std::placeholders::_1),
 				std::bind(&CompositorImpl::open, std::ref(**this), std::placeholders::_1),
 				std::bind(&CompositorImpl::close, std::ref(**this), std::placeholders::_1),
@@ -284,5 +402,24 @@ Compositor::Compositor(Compositor&& other) = default;
 Compositor::~Compositor() = default;
 
 Compositor& Compositor::operator=(Compositor&& other) = default;
+
+
+void Compositor::setLayerCount(size_t count) {
+	(*this)->setLayerCount(count);
+}
+
+size_t Compositor::getLayerCount() const {
+	(*this)->getLayerCount();
+}
+
+
+void Compositor::setCamera(const Camera& cam) {
+	(*this)->setCamera(cam);
+}
+
+const Compositor::Camera& Compositor::getCamera() const {
+	(*this)->getCamera();
+}
+
 
 }

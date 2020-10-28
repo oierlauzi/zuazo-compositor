@@ -28,5 +28,15 @@ inline LayerData::RenderingStage LayerData::getRenderingStage() const {
 	return m_stage;
 }
 
+
+inline void LayerData::setHasAlpha(bool alpha) {
+	m_hasAlpha = alpha;
+}
+
+inline bool LayerData::getHasAlpha() const {
+	return m_hasAlpha;
+}
+
+
 }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Processors/Compositor.h"
+
 #include <zuazo/Macros.h>
 #include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Math/Vector.h>
@@ -12,11 +14,7 @@ namespace Zuazo {
 class LayerData {
 public:
 	using CommandBuffer = std::shared_ptr<const Graphics::CommandBuffer>;
-
-	enum class RenderingStage {
-		NORMAL,
-		TRANSPARENT
-	};
+	using RenderingStage = Processors::Compositor::RenderingStage;
 
 	LayerData() = default;
 	LayerData(const LayerData& other) = default;
@@ -35,10 +33,14 @@ public:
 	void					setRenderingStage(RenderingStage stage);
 	RenderingStage			getRenderingStage() const;
 
+	void					setHasAlpha(bool alpha);
+	bool					getHasAlpha() const;
+
 private:
 	CommandBuffer			m_commandBuffer;
 	Math::Vec4f				m_averagePosition;
 	RenderingStage			m_stage;
+	bool					m_hasAlpha;
 
 };
 
