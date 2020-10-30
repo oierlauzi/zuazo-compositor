@@ -61,7 +61,11 @@ public:
 
 	Camera(	const Math::Vec3f& position	= Math::Vec3f(0.0f, 0.0f, 0.0f),
 			const Math::Vec3f& target 	= Math::Vec3f(1.0f, 0.0f, 0.0f),
-			const Math::Vec3f& up 		= Math::Vec3f(0.0f, 1.0f, 0.0f) );
+			const Math::Vec3f& up 		= Math::Vec3f(0.0f, 1.0f, 0.0f),
+			Projection projection		= Projection::FRUSTUM,
+			float fov					= 45.0f,
+			float nearClip				= 1.0f,
+			float farClip 				= 1e6f );
 	Camera(const Camera& other);
 	~Camera();
 
@@ -87,6 +91,9 @@ public:
 
 	void					setFarClip(float far);
 	float					getFarClip() const;
+
+	Math::Mat4x4f			calculateViewMatrix() const;
+	Math::Mat4x4f			calculateProjectionMatrix(const Math::Vec2f& size) const;
 
 private:
 	Math::Vec3f				m_position;
