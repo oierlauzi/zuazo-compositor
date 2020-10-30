@@ -5,16 +5,12 @@
 
 namespace Zuazo::Processors {
 
-Compositor::Camera::Camera(	const Math::Vec3f& position,
-							const Math::Vec3f& target,
-							const Math::Vec3f& up,
+Compositor::Camera::Camera(	const Math::Transformf& trf,
 							Projection projection,
 							float fov,
 							float nearClip,
 							float farClip )
-	: m_position(position)
-	, m_target(target)
-	, m_upDirection(up)
+	: m_transform(trf)
 	, m_projection(projection)
 	, m_fieldOfView(fov)
 	, m_nearClip(nearClip)
@@ -29,30 +25,13 @@ Compositor::Camera::~Camera() = default;
 Compositor::Camera& Compositor::Camera::operator=(const Camera& other) = default;
 
 
-void Compositor::Camera::setPosition(const Math::Vec3f& position) {
-	m_position = position;
+
+void Compositor::Camera::setTransform(const Math::Transformf& trf) {
+	m_transform = trf;
 }
 
-const Math::Vec3f& Compositor::Camera::getPosition() const {
-	return m_position;
-}
-
-
-void Compositor::Camera::setTarget(const Math::Vec3f& target) {
-	m_target = target;
-}
-
-const Math::Vec3f& Compositor::Camera::getTarget() const {
-	return m_target;
-}
-
-
-void Compositor::Camera::setUpDirection(const Math::Vec3f& up) {
-	m_upDirection = up;
-}
-
-const Math::Vec3f& Compositor::Camera::getUpDirection() const {
-	return m_upDirection;
+const Math::Transformf& Compositor::Camera::getTransform() const {
+	return m_transform;
 }
 
 
@@ -92,12 +71,10 @@ float Compositor::Camera::getFarClip() const {
 }
 
 
-Math::Mat4x4f Compositor::Camera::calculateViewMatrix() const {
-	return Math::lookAt(
-		getPosition(),		//Eye
-		getTarget(),		//Center
-		getUpDirection()	//Up
-	);
+Math::Mat4x4f Compositor::Camera::calculateMatrix(const Math::Vec2f& size) const {
+	const auto projectionMtx = calculateProjectionMatrix(size);
+	const auto viewMtx = Math::inv(getTransform().calculateMatrix());
+	return projectionMtx * viewMtx;
 }
 
 Math::Mat4x4f Compositor::Camera::calculateProjectionMatrix(const Math::Vec2f& size) const {

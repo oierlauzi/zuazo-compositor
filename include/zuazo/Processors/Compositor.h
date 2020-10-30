@@ -4,6 +4,7 @@
 #include <zuazo/Video.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Signal/SourceLayout.h>
+#include <zuazo/Math/Transform.h>
 
 namespace Zuazo::Processors {
 
@@ -59,26 +60,18 @@ public:
 		FRUSTUM
 	};
 
-	Camera(	const Math::Vec3f& position	= Math::Vec3f(0.0f, 0.0f, 0.0f),
-			const Math::Vec3f& target 	= Math::Vec3f(1.0f, 0.0f, 0.0f),
-			const Math::Vec3f& up 		= Math::Vec3f(0.0f, 1.0f, 0.0f),
-			Projection projection		= Projection::FRUSTUM,
-			float fov					= 45.0f,
-			float nearClip				= 1.0f,
-			float farClip 				= 1e6f );
+	explicit Camera(const Math::Transformf& trf = Math::Transformf(),
+					Projection projection		= Projection::FRUSTUM,
+					float fov					= 45.0f,
+					float nearClip				= 1.0f,
+					float farClip 				= 1e6f );
 	Camera(const Camera& other);
 	~Camera();
 
 	Camera& 				operator=(const Camera& other);
 
-	void					setPosition(const Math::Vec3f& position);
-	const Math::Vec3f&		getPosition() const;
-	
-	void					setTarget(const Math::Vec3f& target);
-	const Math::Vec3f&		getTarget() const;
-
-	void					setUpDirection(const Math::Vec3f& up);
-	const Math::Vec3f&		getUpDirection() const;
+	void					setTransform(const Math::Transformf& trf);
+	const Math::Transformf&	getTransform() const;
 
 	void					setProjection(Projection proj);
 	Projection				getProjection() const;
@@ -92,14 +85,11 @@ public:
 	void					setFarClip(float far);
 	float					getFarClip() const;
 
-	Math::Mat4x4f			calculateViewMatrix() const;
+	Math::Mat4x4f			calculateMatrix(const Math::Vec2f& size) const;
 	Math::Mat4x4f			calculateProjectionMatrix(const Math::Vec2f& size) const;
 
 private:
-	Math::Vec3f				m_position;
-	Math::Vec3f				m_target;
-	Math::Vec3f				m_upDirection;
-
+	Math::Transformf		m_transform;
 	Projection				m_projection;
 	float					m_fieldOfView;
 	float					m_nearClip;
