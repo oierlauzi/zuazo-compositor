@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.9)
 include(GNUInstallDirs)
 
 #Project info
-project(zuazo-composer
+project(zuazo-compositor
 	VERSION 0.1.0 
 	DESCRIPTION "Combine multiple video sources"
 )

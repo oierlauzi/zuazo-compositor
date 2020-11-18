@@ -120,6 +120,12 @@ struct CompositorImpl {
 
 
 
+			//Begin the commandbuffer
+			constexpr vk::CommandBufferBeginInfo cmdBeginInfo(
+				vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+			);
+			commandBuffer->begin(cmdBeginInfo);
+
 			//Bind all descriptors
 			commandBuffer->bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
@@ -148,7 +154,7 @@ struct CompositorImpl {
 			}
 
 			result->endRenderPass(commandBuffer->getCommandBuffer());
-
+			commandBuffer->end();
 
 			//Add dependencies to the command buffer
 			commandBuffer->setDependencies(cache.dependencies);
@@ -501,6 +507,25 @@ struct CompositorImpl {
 		}
 	}
 
+	std::vector<VideoMode> getVideoModeCompatibility() const {
+		const auto& compositor = owner.get();
+		std::vector<VideoMode> result;
+
+		result.emplace_back(
+			Utils::MustBe<Rate>(Rate(0, 1)),
+			compositor.getInstance().getResolutionSupport(),
+			Utils::Any<AspectRatio>(),
+			Utils::Any<ColorPrimaries>(),
+			Utils::Any<ColorModel>(),
+			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::LINEAR),
+			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
+			Utils::Any<ColorRange>(),
+			Graphics::Drawtable::getSupportedFormats(compositor.getInstance().getVulkan())
+		);
+
+		return result;
+	}
+
 	void videoModeCallback(VideoBase& base, const VideoMode& videoMode) {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
@@ -623,7 +648,7 @@ Compositor::Compositor(	Instance& instance,
 		std::bind(&CompositorImpl::videoModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, Signal::SourceLayout<Video>(makeProxy((*this)->videoOut))
 {
-
+	setVideoModeCompatibility((*this)->getVideoModeCompatibility());
 }
 
 Compositor::Compositor(Compositor&& other) = default;
