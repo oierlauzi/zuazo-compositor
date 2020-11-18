@@ -259,16 +259,17 @@ struct CompositorImpl {
 			 * to the depth buffer so that the ordering is preserved. Depth buffer should be cleared from stage to stage.
              */
 
-			assert(false); //TODO
+			assert(false); (void)(a); (void)(b);//TODO
 		}
 
 		static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
-												const Graphics::Frame::Descriptor& conf,
+												const Graphics::Frame::Descriptor& frameDesc,
 												DepthStencilFormat depthStencilFmt ) 
 		{
-			return Compositor::getRenderPass(
+			return Graphics::Drawtable::getRenderPass(
 				vulkan,
-				Compositor::FrameBufferFormat{ conf.colorFormat, depthStencilFmt }
+				frameDesc,
+				depthStencilFmt
 			);
 		}
 
@@ -555,12 +556,6 @@ struct CompositorImpl {
 
 
 
-	static vk::RenderPass getRenderPass(const Graphics::Vulkan& vulkan, 
-										const Compositor::FrameBufferFormat& fbFormat )
-	{
-		
-	}
-
 	static vk::DescriptorSetLayout getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 		static const Utils::StaticId id;
 
@@ -656,12 +651,6 @@ const Compositor::Camera& Compositor::getCamera() const {
 }
 
 
-
-vk::RenderPass Compositor::getRenderPass(	const Graphics::Vulkan& vulkan, 
-											const FrameBufferFormat& fbFormat )
-{
-	return CompositorImpl::getRenderPass(vulkan, fbFormat);
-}
 
 vk::DescriptorSetLayout Compositor::getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 	return CompositorImpl::getDescriptorSetLayout(vulkan);

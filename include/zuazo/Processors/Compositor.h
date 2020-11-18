@@ -26,11 +26,6 @@ public:
 
 	class Camera;
 
-	struct FrameBufferFormat {
-		ColorFormat				colorFormat;
-		DepthStencilFormat		depthStencilFormat;
-	};
-
 	Compositor(	Instance& instance, 
 				std::string name, 
 				VideoMode videoMode = VideoMode::ANY );
@@ -46,9 +41,6 @@ public:
 
 	void							setCamera(const Camera& cam);
 	const Camera&					getCamera() const;
-
-	static vk::RenderPass			getRenderPass(	const Graphics::Vulkan& vulkan, 
-													const FrameBufferFormat& fbFormat );
 
 	static vk::DescriptorSetLayout	getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
 
