@@ -2,6 +2,7 @@
 
 #include <zuazo/ZuazoBase.h>
 #include <zuazo/Video.h>
+#include <zuazo/DepthStencilFormat.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Signal/SourceLayout.h>
 #include <zuazo/Math/Transform.h>
@@ -27,7 +28,7 @@ public:
 
 	struct FrameBufferFormat {
 		ColorFormat				colorFormat;
-		//DepthStencilFormat	depthStencilFormat
+		DepthStencilFormat		depthStencilFormat;
 	};
 
 	Compositor(	Instance& instance, 
@@ -37,19 +38,23 @@ public:
 	Compositor(Compositor&& other);
 	virtual ~Compositor();
 
-	Compositor& 			operator=(const Compositor& other) = delete;
-	Compositor& 			operator=(Compositor&& other);
+	Compositor& 					operator=(const Compositor& other) = delete;
+	Compositor& 					operator=(Compositor&& other);
 
-	void					setLayerCount(size_t count);
-	size_t					getLayerCount() const;
+	void							setLayerCount(size_t count);
+	size_t							getLayerCount() const;
 
-	void					setCamera(const Camera& cam);
-	const Camera&			getCamera() const;
+	void							setCamera(const Camera& cam);
+	const Camera&					getCamera() const;
 
-	static vk::RenderPass	createRenderPass(	const Graphics::Vulkan& vulkan, 
-												const FrameBufferFormat& fbFormat );
+	static vk::RenderPass			getRenderPass(	const Graphics::Vulkan& vulkan, 
+													const FrameBufferFormat& fbFormat );
+
+	static vk::DescriptorSetLayout	getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
 
 };
+
+ZUAZO_ENUM_COMP_OPERATORS(Compositor::RenderingStage)
 
 
 
@@ -86,6 +91,7 @@ public:
 	float					getFarClip() const;
 
 	Math::Mat4x4f			calculateMatrix(const Math::Vec2f& size) const;
+	Math::Mat4x4f			calculateViewMatrix() const;
 	Math::Mat4x4f			calculateProjectionMatrix(const Math::Vec2f& size) const;
 
 private:

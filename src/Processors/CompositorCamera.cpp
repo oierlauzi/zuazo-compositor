@@ -73,8 +73,12 @@ float Compositor::Camera::getFarClip() const {
 
 Math::Mat4x4f Compositor::Camera::calculateMatrix(const Math::Vec2f& size) const {
 	const auto projectionMtx = calculateProjectionMatrix(size);
-	const auto viewMtx = Math::inv(getTransform().calculateMatrix());
+	const auto viewMtx = calculateViewMatrix();
 	return projectionMtx * viewMtx;
+}
+
+Math::Mat4x4f Compositor::Camera::calculateViewMatrix() const {
+	return Math::inv(getTransform().calculateMatrix());
 }
 
 Math::Mat4x4f Compositor::Camera::calculateProjectionMatrix(const Math::Vec2f& size) const {

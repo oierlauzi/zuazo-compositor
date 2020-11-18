@@ -44,9 +44,6 @@ private:
 
 };
 
-ZUAZO_ENUM_COMP_OPERATORS(LayerData::RenderingStage)
-
-
 using LayerDataStream = std::shared_ptr<const LayerData>;
 
 
