@@ -96,3 +96,11 @@ private:
 };
 
 }
+
+namespace Zuazo::PixelFormats {
+
+extern const VideoMode COMPOSITOR_OPTIMAL_8;
+extern const VideoMode COMPOSITOR_OPTIMAL_16;
+extern const VideoMode COMPOSITOR_OPTIMAL_16F;
+
+}

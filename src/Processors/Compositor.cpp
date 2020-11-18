@@ -178,7 +178,7 @@ struct CompositorImpl {
 			 * 2. Draw the alphaless SCENE backwards, writing and testing depth
 			 * 3. Draw the transparent SCENE forwards, writing and testing depth
 			 * 4. Draw the FOREGROUND from bottom to top
-             */
+			 */
 			
 			if(	a.getRenderingStage() == Compositor::RenderingStage::SCENE &&
 				b.getRenderingStage() == Compositor::RenderingStage::SCENE ) 
@@ -263,7 +263,7 @@ struct CompositorImpl {
 			 * 
 			 * //FIXME this technique wont preserve background and foreground layer ordering. Somehow layer # should be written
 			 * to the depth buffer so that the ordering is preserved. Depth buffer should be cleared from stage to stage.
-             */
+			 */
 
 			assert(false); (void)(a); (void)(b);//TODO
 		}
@@ -454,27 +454,27 @@ struct CompositorImpl {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 
-		opened = Utils::makeUnique<Open>(
-			compositor.getInstance().getVulkan(),
-			compositor.getVideoMode() ? compositor.getVideoMode().getFrameDescriptor() : Graphics::Frame::Descriptor(),
-			depthStencilFormat
-		);
+		if(compositor.getVideoMode()) {
+			opened = Utils::makeUnique<Open>(
+				compositor.getInstance().getVulkan(),
+				compositor.getVideoMode().getFrameDescriptor(),
+				depthStencilFormat
+			);
+		}
+
 		hasChanged = true; //Signal rendering if needed
 	}
 
 	void close(ZuazoBase& base) {
-		assert(opened);
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
-        
-        videoOut.reset();
+		
+		videoOut.reset();
 		opened.reset();
 	}
 
 	void update() {
 		auto& compositor = owner.get();
-
-
 
 		if(opened) {
 			const bool inputsHaveChanged = std::any_of(
@@ -530,11 +530,27 @@ struct CompositorImpl {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 
-		if(opened) {
-			opened->recreate(
-				videoMode ? videoMode.getFrameDescriptor() : Graphics::Frame::Descriptor(),
-				depthStencilFormat
-			);
+		if(compositor.isOpen()) {
+			const auto isValid = static_cast<bool>(videoMode);
+
+			if(opened && isValid) {
+				//Video mode remains valid
+				opened->recreate(
+					videoMode.getFrameDescriptor(),
+					depthStencilFormat
+				);
+			} else if(opened && !isValid) {
+				//Video mode is not valid anymore
+				opened.reset();
+				videoOut.reset();
+			} else if(!opened && isValid) {
+				//Video mode has become valid
+				opened = Utils::makeUnique<Open>(
+					compositor.getInstance().getVulkan(),
+					videoMode.getFrameDescriptor(),
+					depthStencilFormat
+				);
+			}
 		}
 
 		hasChanged = true;
