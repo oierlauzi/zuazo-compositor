@@ -522,7 +522,8 @@ struct CompositorImpl {
 
 			//Add the color attachment clear values
 			for(size_t i = 0; i < coloAttachmentCount; ++i) {
-				result.emplace_back(vk::ClearColorValue()); //Default initializer of floats (Unorm)
+				//FIXME write 0.0 to the chroma values in case it is YCbCr
+				result.emplace_back(vk::ClearColorValue()); //Default initializer to 0 of floats (Unorm)
 			}
 
 			//Add the depth/stencil attachemnt clear values
@@ -624,6 +625,7 @@ struct CompositorImpl {
 		const auto& compositor = owner.get();
 		std::vector<VideoMode> result;
 
+		//Normal formats
 		result.emplace_back(
 			Utils::MustBe<Rate>(Rate(0, 1)),
 			compositor.getInstance().getResolutionSupport(),
@@ -634,6 +636,19 @@ struct CompositorImpl {
 			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
 			Utils::Any<ColorRange>(),
 			Graphics::Drawtable::getSupportedFormats(compositor.getInstance().getVulkan())
+		);
+
+		//sRGB formats
+		result.emplace_back(
+			Utils::MustBe<Rate>(Rate(0, 1)),
+			compositor.getInstance().getResolutionSupport(),
+			Utils::Any<AspectRatio>(),
+			Utils::Any<ColorPrimaries>(),
+			Utils::MustBe<ColorModel>(ColorModel::RGB),
+			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::LINEAR),
+			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
+			Utils::MustBe<ColorRange>(ColorRange::FULL),
+			Graphics::Drawtable::getSupportedSrgbFormats(compositor.getInstance().getVulkan())
 		);
 
 		return result;
