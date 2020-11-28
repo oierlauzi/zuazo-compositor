@@ -63,6 +63,8 @@ struct CompositorImpl {
 		
 		std::vector<vk::ClearValue>					clearValues;
 
+		std::shared_ptr<const Graphics::Frame>		lastFrame;
+
 		Layers										layers;
 		Cache										cache;
 
@@ -211,6 +213,7 @@ struct CompositorImpl {
 			cache.drawCommandBuffers.clear();
 			cache.dependencies.clear();
 
+			lastFrame = result;
 			return result;
 		}
 
@@ -271,6 +274,7 @@ struct CompositorImpl {
 		}
 
 		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
+			waitRenderCompletion();
 			uniformBuffer.waitCompletion(vulkan);
 
 			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].begin(uniformBuffer.data())));
@@ -287,6 +291,7 @@ struct CompositorImpl {
 		}
 
 		void updateColorTransferUniform() {
+			waitRenderCompletion();
 			uniformBuffer.waitCompletion(vulkan);
 			
 			std::memcpy(
@@ -306,6 +311,7 @@ struct CompositorImpl {
 		}
 
 		void updateUniforms(const Compositor::Camera& cam) {
+			waitRenderCompletion();
 			uniformBuffer.waitCompletion(vulkan);		
 			
 			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].begin(uniformBuffer.data())));
@@ -366,6 +372,12 @@ struct CompositorImpl {
 			};
 
 			vulkan.updateDescriptorSets(writeDescriptorSets, {});
+		}
+
+		void waitRenderCompletion() {
+			if(lastFrame) {
+				lastFrame->waitDependencies();
+			}
 		}
 
 		static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
