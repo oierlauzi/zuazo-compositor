@@ -94,7 +94,9 @@ struct CompositorImpl {
 
 		Open(const Open& other) = delete;
 
-		~Open() = default;
+		~Open() {
+			uniformBuffer.waitCompletion(vulkan);
+		}
 
 		void recreate(	const Graphics::Frame::Descriptor& desc,
 						DepthStencilFormat depthStencilFmt,
