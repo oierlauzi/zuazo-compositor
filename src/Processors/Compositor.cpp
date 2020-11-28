@@ -16,6 +16,7 @@
 #include <utility>
 #include <algorithm>
 #include <tuple>
+#include <bitset>
 
 namespace Zuazo::Processors {
 
@@ -57,6 +58,7 @@ struct CompositorImpl {
 		vk::PipelineLayout							pipelineLayout;
 
 		Graphics::Drawtable 						drawtable;
+		Graphics::OutputColorTransfer				colorTransfer;
 		Graphics::CommandBufferPool					commandBufferPool;
 		
 		std::vector<vk::ClearValue>					clearValues;
@@ -66,7 +68,8 @@ struct CompositorImpl {
 
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& desc,
-				DepthStencilFormat depthStencilFmt)
+				DepthStencilFormat depthStencilFmt,
+				const Compositor::Camera& cam )
 			: vulkan(vulkan)
 			, uniformBufferLayout(createUniformBufferLayout(vulkan))
 			, uniformBuffer(createUniformBuffer(vulkan, uniformBufferLayout))
@@ -75,10 +78,16 @@ struct CompositorImpl {
 			, pipelineLayout(createPipelineLayout(vulkan))
 
 			, drawtable(createDrawtable(vulkan, desc, depthStencilFmt))
+			, colorTransfer(drawtable.getOutputColorTransfer())
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
 			, clearValues(createClearValues(desc, depthStencilFmt))
 		{
+			//Bind the uniform buffers to the descriptor sets
+			writeDescriptorSets();
+
+			//Update the contents of the uniforms buffers
+			updateUniforms(cam);
 		}
 
 		Open(const Open& other) = delete;
@@ -86,10 +95,45 @@ struct CompositorImpl {
 		~Open() = default;
 
 		void recreate(	const Graphics::Frame::Descriptor& desc,
-						DepthStencilFormat depthStencilFmt )
+						DepthStencilFormat depthStencilFmt,
+						const Compositor::Camera& cam )
 		{
-			drawtable = Graphics::Drawtable(drawtable.getVulkan(), desc, depthStencilFmt);
-			clearValues = createClearValues(desc, depthStencilFmt);
+			enum {
+				RECREATE_DRAWTABLE,
+				RECREATE_CLEAR_VALUES,
+				UPDATE_PROJECTION_MATRIX,
+				UPDATE_COLOR_TRANSFER,
+
+				MODIFICATION_COUNT
+			};
+
+			std::bitset<MODIFICATION_COUNT> modifications;
+
+			modifications.set(RECREATE_DRAWTABLE); //Best guess
+			modifications.set(UPDATE_PROJECTION_MATRIX, drawtable.getFrameDescriptor().calculateSize() != desc.calculateSize());
+
+			//Evaluate which modifications need to be done
+			if(modifications.test(RECREATE_DRAWTABLE)) {
+				drawtable = Graphics::Drawtable(drawtable.getVulkan(), desc, depthStencilFmt);
+				modifications.set(RECREATE_CLEAR_VALUES); //Best guess
+				modifications.set(UPDATE_COLOR_TRANSFER); //Best guess
+			}
+
+			if(modifications.test(RECREATE_CLEAR_VALUES)) {
+				clearValues = createClearValues(desc, depthStencilFmt);
+			}
+
+			if(modifications.test(UPDATE_PROJECTION_MATRIX) && modifications.test(UPDATE_COLOR_TRANSFER)) {
+				updateUniforms(cam);
+			} else if(modifications.test(UPDATE_PROJECTION_MATRIX)) {
+				updateProjectionMatrixUniform(cam);
+			} else if(modifications.test(UPDATE_COLOR_TRANSFER)) {
+				updateColorTransferUniform();
+			}
+		}
+
+		void setCamera(const Compositor::Camera& cam) {
+			updateProjectionMatrixUniform(cam);
 		}
 
 		void addLayer(const LayerData& layer) {
@@ -138,7 +182,7 @@ struct CompositorImpl {
 			//Draw to the command buffer
 			const vk::Rect2D drawRect(
 				vk::Offset2D(0, 0),
-				Graphics::toVulkan(result->getDescriptor().resolution)
+				Graphics::toVulkan(result->getDescriptor().getResolution())
 			);
 
 			result->beginRenderPass(
@@ -208,6 +252,79 @@ struct CompositorImpl {
 				return a.getRenderingStage() < b.getRenderingStage();
 			}
 		}
+		
+		bool layerCompStencil(const LayerData& a, const LayerData& b) {
+			/*
+			 * The strategy will be the following:
+			 * 1. Draw the alphaless FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
+			 * 2. Draw the alphaless SCENE backwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
+			 * 3. Draw the alphaless BACKGROUND from top to bottom, writing (0x00) and testing (GEQ) stencil
+			 * 4. Draw the transparent BACKGROUND from bottom to top, writing (0x00) and testing (GEQ) stencil
+			 * 5. Draw the transparent SCENE forwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
+			 * 6. Draw the transparent FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
+			 * 
+			 * //FIXME this technique wont preserve background and foreground layer ordering. Somehow layer # should be written
+			 * to the depth buffer so that the ordering is preserved. Depth buffer should be cleared from stage to stage.
+			 */
+
+			assert(false); (void)(a); (void)(b);//TODO
+		}
+
+		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
+			uniformBuffer.waitCompletion(vulkan);
+
+			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].begin(uniformBuffer.data())));
+			mtx = cam.calculateMatrix(drawtable.getFrameDescriptor().calculateSize());
+
+			uniformBuffer.flushData(
+				vulkan,
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].offset(),
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].size(),
+				vulkan.getGraphicsQueueIndex(),
+				vk::AccessFlagBits::eUniformRead,
+				vk::PipelineStageFlagBits::eVertexShader
+			);
+		}
+
+		void updateColorTransferUniform() {
+			uniformBuffer.waitCompletion(vulkan);
+			
+			std::memcpy(
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].begin(uniformBuffer.data()),
+				colorTransfer.data(),
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].size()
+			);
+
+			uniformBuffer.flushData(
+				vulkan,
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].offset(),
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].size(),
+				vulkan.getGraphicsQueueIndex(),
+				vk::AccessFlagBits::eUniformRead,
+				vk::PipelineStageFlagBits::eFragmentShader
+			);
+		}
+
+		void updateUniforms(const Compositor::Camera& cam) {
+			uniformBuffer.waitCompletion(vulkan);		
+			
+			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[COMPOSITOR_DESCRIPTOR_PROJECTION_MATRIX].begin(uniformBuffer.data())));
+			mtx = cam.calculateMatrix(drawtable.getFrameDescriptor().calculateSize());
+
+			std::memcpy(
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].begin(uniformBuffer.data()),
+				colorTransfer.data(),
+				uniformBufferLayout[COMPOSITOR_DESCRIPTOR_COLOR_TRANSFER].size()
+			);
+
+			uniformBuffer.flushData(
+				vulkan,
+				vulkan.getGraphicsQueueIndex(),
+				vk::AccessFlagBits::eUniformRead,
+				vk::PipelineStageFlagBits::eVertexShader |
+				vk::PipelineStageFlagBits::eFragmentShader
+			);
+		}
 
 		void writeDescriptorSets() {
 			const std::array projectionMatrixBuffers = {
@@ -249,23 +366,6 @@ struct CompositorImpl {
 			};
 
 			vulkan.updateDescriptorSets(writeDescriptorSets, {});
-		}
-
-		bool layerCompStencil(const LayerData& a, const LayerData& b) {
-			/*
-			 * The strategy will be the following:
-			 * 1. Draw the alphaless FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
-			 * 2. Draw the alphaless SCENE backwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
-			 * 3. Draw the alphaless BACKGROUND from top to bottom, writing (0x00) and testing (GEQ) stencil
-			 * 4. Draw the transparent BACKGROUND from bottom to top, writing (0x00) and testing (GEQ) stencil
-			 * 5. Draw the transparent SCENE forwards, writing and testing depth, writing (0x01) and testing (GEQ) stencil
-			 * 6. Draw the transparent FOREGROUND from top to bottom, writing (0x02) and testing (GEQ) stencil
-			 * 
-			 * //FIXME this technique wont preserve background and foreground layer ordering. Somehow layer # should be written
-			 * to the depth buffer so that the ordering is preserved. Depth buffer should be cleared from stage to stage.
-			 */
-
-			assert(false); (void)(a); (void)(b);//TODO
 		}
 
 		static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
@@ -403,7 +503,7 @@ struct CompositorImpl {
 			std::vector<vk::ClearValue> result;
 
 			//Obtain information about the attachments
-			const auto coloAttachmentCount = getPlaneCount(desc.colorFormat);
+			const auto coloAttachmentCount = getPlaneCount(desc.getColorFormat());
 			const auto hasDepthStencil = DepthStencilFormat::NONE < depthStencilFmt && depthStencilFmt < DepthStencilFormat::COUNT;
 			assert(coloAttachmentCount > 0 && coloAttachmentCount <= 4);
 			result.reserve(coloAttachmentCount + hasDepthStencil);
@@ -458,7 +558,8 @@ struct CompositorImpl {
 			opened = Utils::makeUnique<Open>(
 				compositor.getInstance().getVulkan(),
 				compositor.getVideoMode().getFrameDescriptor(),
-				depthStencilFormat
+				depthStencilFormat,
+				camera
 			);
 		}
 
@@ -537,7 +638,8 @@ struct CompositorImpl {
 				//Video mode remains valid
 				opened->recreate(
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat
+					depthStencilFormat,
+					camera
 				);
 			} else if(opened && !isValid) {
 				//Video mode is not valid anymore
@@ -548,7 +650,8 @@ struct CompositorImpl {
 				opened = Utils::makeUnique<Open>(
 					compositor.getInstance().getVulkan(),
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat
+					depthStencilFormat,
+					camera
 				);
 			}
 		}
@@ -588,6 +691,11 @@ struct CompositorImpl {
 
 	void setCamera(const Compositor::Camera& cam) {
 		camera = cam;
+
+		if(opened) {
+			opened->setCamera(camera);
+		}
+
 		hasChanged = true;
 	}
 
