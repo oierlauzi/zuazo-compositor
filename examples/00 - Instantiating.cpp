@@ -54,7 +54,12 @@ int main() {
 	);
 
 	compositor.open();
-	std::cout << compositor.getVideoMode() << std::endl;
+
+	std::cout << "Compatibility:" << std::endl;
+	for(const auto& compatibility : compositor.getVideoModeCompatibility()) {
+		std::cout << "\t-" << compatibility << std::endl;
+	}
+	std::cout << "Selected video-mode:\n" << compositor.getVideoMode() << std::endl;
 
 	window << compositor;
 

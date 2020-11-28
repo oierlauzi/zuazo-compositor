@@ -42,6 +42,9 @@ public:
 	void							setCamera(const Camera& cam);
 	const Camera&					getCamera() const;
 
+	static vk::RenderPass			getRenderPass(	const Graphics::Vulkan& vulkan, 
+													const Graphics::Frame::Descriptor& frameDesc,
+													DepthStencilFormat depthStencilFmt );
 	static vk::DescriptorSetLayout	getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
 
 };

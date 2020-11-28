@@ -69,7 +69,7 @@ struct CompositorImpl {
 		Cache										cache;
 
 		Open(	const Graphics::Vulkan& vulkan, 
-				const Graphics::Frame::Descriptor& desc,
+				const Graphics::Frame::Descriptor& frameDesc,
 				DepthStencilFormat depthStencilFmt,
 				const Compositor::Camera& cam )
 			: vulkan(vulkan)
@@ -79,11 +79,11 @@ struct CompositorImpl {
 			, descriptorSet(createDescriptorSet(vulkan, *descriptorPool))
 			, pipelineLayout(createPipelineLayout(vulkan))
 
-			, drawtable(createDrawtable(vulkan, desc, depthStencilFmt))
+			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
 			, colorTransfer(drawtable.getOutputColorTransfer())
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
-			, clearValues(createClearValues(desc, depthStencilFmt))
+			, clearValues(Graphics::Drawtable::getClearValues(frameDesc, depthStencilFmt))
 		{
 			//Bind the uniform buffers to the descriptor sets
 			writeDescriptorSets();
@@ -98,7 +98,7 @@ struct CompositorImpl {
 			uniformBuffer.waitCompletion(vulkan);
 		}
 
-		void recreate(	const Graphics::Frame::Descriptor& desc,
+		void recreate(	const Graphics::Frame::Descriptor& frameDesc,
 						DepthStencilFormat depthStencilFmt,
 						const Compositor::Camera& cam )
 		{
@@ -114,17 +114,17 @@ struct CompositorImpl {
 			std::bitset<MODIFICATION_COUNT> modifications;
 
 			modifications.set(RECREATE_DRAWTABLE); //Best guess
-			modifications.set(UPDATE_PROJECTION_MATRIX, drawtable.getFrameDescriptor().calculateSize() != desc.calculateSize());
+			modifications.set(UPDATE_PROJECTION_MATRIX, drawtable.getFrameDescriptor().calculateSize() != frameDesc.calculateSize());
 
 			//Evaluate which modifications need to be done
 			if(modifications.test(RECREATE_DRAWTABLE)) {
-				drawtable = Graphics::Drawtable(drawtable.getVulkan(), desc, depthStencilFmt);
+				drawtable = Graphics::Drawtable(drawtable.getVulkan(), frameDesc, depthStencilFmt);
 				modifications.set(RECREATE_CLEAR_VALUES); //Best guess
 				modifications.set(UPDATE_COLOR_TRANSFER); //Best guess
 			}
 
 			if(modifications.test(RECREATE_CLEAR_VALUES)) {
-				clearValues = createClearValues(desc, depthStencilFmt);
+				clearValues = Graphics::Drawtable::getClearValues(frameDesc, depthStencilFmt);
 			}
 
 			if(modifications.test(UPDATE_PROJECTION_MATRIX) && modifications.test(UPDATE_COLOR_TRANSFER)) {
@@ -386,11 +386,7 @@ struct CompositorImpl {
 												const Graphics::Frame::Descriptor& frameDesc,
 												DepthStencilFormat depthStencilFmt ) 
 		{
-			return Graphics::Drawtable::getRenderPass(
-				vulkan,
-				frameDesc,
-				depthStencilFmt
-			);
+			return Compositor::getRenderPass(vulkan, frameDesc, depthStencilFmt);
 		}
 
 		static UniformBufferLayout createUniformBufferLayout(const Graphics::Vulkan& vulkan) {
@@ -510,31 +506,6 @@ struct CompositorImpl {
 				vk::CommandBufferLevel::ePrimary
 			);
 		}
-		
-		static std::vector<vk::ClearValue> createClearValues(	const Graphics::Frame::Descriptor& desc,
-																DepthStencilFormat depthStencilFmt )
-		{
-			std::vector<vk::ClearValue> result;
-
-			//Obtain information about the attachments
-			const auto coloAttachmentCount = getPlaneCount(desc.getColorFormat());
-			const auto hasDepthStencil = DepthStencilFormat::NONE < depthStencilFmt && depthStencilFmt < DepthStencilFormat::COUNT;
-			assert(coloAttachmentCount > 0 && coloAttachmentCount <= 4);
-			result.reserve(coloAttachmentCount + hasDepthStencil);
-
-			//Add the color attachment clear values
-			for(size_t i = 0; i < coloAttachmentCount; ++i) {
-				//FIXME write 0.0 to the chroma values in case it is YCbCr
-				result.emplace_back(vk::ClearColorValue()); //Default initializer to 0 of floats (Unorm)
-			}
-
-			//Add the depth/stencil attachemnt clear values
-			if(hasDepthStencil) {
-				result.emplace_back(vk::ClearDepthStencilValue(1.0f, 0x00)); //Clear to the far plane
-			}
-
-			return result;
-		}
 	};
 
 	using LayerInput = Signal::Input<LayerDataStream>;
@@ -647,7 +618,7 @@ struct CompositorImpl {
 			Utils::Any<AspectRatio>(),
 			Utils::Any<ColorPrimaries>(),
 			Utils::MustBe<ColorModel>(ColorModel::RGB),
-			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::LINEAR),
+			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::IEC61966_2_1),
 			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
 			Utils::MustBe<ColorRange>(ColorRange::FULL),
 			Graphics::Drawtable::getSupportedSrgbFormats(compositor.getInstance().getVulkan())
@@ -733,6 +704,12 @@ struct CompositorImpl {
 	}
 
 
+	static vk::RenderPass getRenderPass(const Graphics::Vulkan& vulkan, 
+										const Graphics::Frame::Descriptor& frameDesc,
+										DepthStencilFormat depthStencilFmt )
+	{
+		return Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
+	}
 
 	static vk::DescriptorSetLayout getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 		static const Utils::StaticId id;
@@ -829,6 +806,12 @@ const Compositor::Camera& Compositor::getCamera() const {
 }
 
 
+vk::RenderPass Compositor::getRenderPass(	const Graphics::Vulkan& vulkan, 
+											const Graphics::Frame::Descriptor& frameDesc,
+											DepthStencilFormat depthStencilFmt )
+{
+	return CompositorImpl::getRenderPass(vulkan, frameDesc, depthStencilFmt);
+}
 
 vk::DescriptorSetLayout Compositor::getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 	return CompositorImpl::getDescriptorSetLayout(vulkan);
