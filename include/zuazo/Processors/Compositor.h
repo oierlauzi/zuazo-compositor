@@ -28,24 +28,30 @@ public:
 
 	Compositor(	Instance& instance, 
 				std::string name, 
-				VideoMode videoMode = VideoMode::ANY );
+				VideoMode videoMode = VideoMode::ANY,
+				Utils::Limit<DepthStencilFormat> depthStencil = Utils::Any<DepthStencilFormat>() );
 	Compositor(const Compositor& other) = delete;
 	Compositor(Compositor&& other);
 	virtual ~Compositor();
 
-	Compositor& 					operator=(const Compositor& other) = delete;
-	Compositor& 					operator=(Compositor&& other);
+	Compositor& 							operator=(const Compositor& other) = delete;
+	Compositor& 							operator=(Compositor&& other);
 
-	void							setLayerCount(size_t count);
-	size_t							getLayerCount() const;
+	void									setLayerCount(size_t count);
+	size_t									getLayerCount() const;
 
-	void							setCamera(const Camera& cam);
-	const Camera&					getCamera() const;
+	void									setCamera(const Camera& cam);
+	const Camera&							getCamera() const;
 
-	static vk::RenderPass			getRenderPass(	const Graphics::Vulkan& vulkan, 
-													const Graphics::Frame::Descriptor& frameDesc,
-													DepthStencilFormat depthStencilFmt );
-	static vk::DescriptorSetLayout	getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
+	void									setDepthStencilFormatLimits(Utils::Limit<DepthStencilFormat> limit);
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormatLimits() const;
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormatCompatibility() const;
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormat() const;
+
+	static vk::RenderPass					getRenderPass(	const Graphics::Vulkan& vulkan, 
+															const Graphics::Frame::Descriptor& frameDesc,
+															DepthStencilFormat depthStencilFmt );
+	static vk::DescriptorSetLayout			getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
 
 };
 
@@ -97,13 +103,5 @@ private:
 	float					m_farClip;
 
 };
-
-}
-
-namespace Zuazo::PixelFormats {
-
-extern const VideoMode COMPOSITOR_OPTIMAL_8;
-extern const VideoMode COMPOSITOR_OPTIMAL_16;
-extern const VideoMode COMPOSITOR_OPTIMAL_16F;
 
 }

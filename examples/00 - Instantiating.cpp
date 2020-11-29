@@ -44,7 +44,7 @@ int main() {
 	//Open the window (now becomes visible)
 	window.open();
 
-	auto compositorVideoMode = Zuazo::Resolutions::FHD;//Zuazo::PixelFormats::COMPOSITOR_OPTIMAL_8.intersect(Zuazo::Resolutions::FHD);
+	auto compositorVideoMode = Zuazo::PixelFormats::RENDER_OPTIMAL_8.intersect(Zuazo::Resolutions::FHD);
 	compositorVideoMode.setColorPrimaries(Zuazo::Utils::MustBe<Zuazo::ColorPrimaries>(Zuazo::ColorPrimaries::BT709));
 	compositorVideoMode.setColorModel(Zuazo::Utils::MustBe<Zuazo::ColorModel>(Zuazo::ColorModel::RGB));
 	Zuazo::Processors::Compositor compositor(

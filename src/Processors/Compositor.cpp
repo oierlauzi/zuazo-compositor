@@ -513,18 +513,28 @@ struct CompositorImpl {
 
 	std::reference_wrapper<Compositor> 			owner;
 
-	DepthStencilFormat							depthStencilFormat;
-	Compositor::Camera							camera;
-
 	std::vector<LayerInput>						layerIns;
 	Output										videoOut;
+
+	Compositor::Camera							camera;
+
+	Utils::Limit<DepthStencilFormat>			depthStencilFormatLimits;
+	Utils::Limit<DepthStencilFormat>			depthStencilFormatCompatibility;
+	Utils::Limit<DepthStencilFormat>			depthStencilFormat;
 
 	std::unique_ptr<Open>						opened;
 	bool										hasChanged;
 
-	CompositorImpl(Compositor& comp) 
+	CompositorImpl(	Compositor& comp, 
+					const Graphics::Vulkan& vulkan, 
+					Utils::Limit<DepthStencilFormat> depthStencil )
 		: owner(comp)
+		, layerIns()
 		, videoOut(std::string(Signal::makeOutputName<Video>()), createPullCallback(this))
+		, camera()
+		, depthStencilFormatLimits(std::move(depthStencil))
+		, depthStencilFormatCompatibility(Graphics::Drawtable::getSupportedFormatsDepthStencil(vulkan))
+		, depthStencilFormat(Utils::MustBe<DepthStencilFormat>(depthStencilFormatCompatibility.intersect(depthStencilFormatCompatibility).lowest()))
 	{
 	}
 
@@ -540,11 +550,11 @@ struct CompositorImpl {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 
-		if(compositor.getVideoMode()) {
+		if(static_cast<bool>(compositor.getVideoMode()) && static_cast<bool>(depthStencilFormat)) {
 			opened = Utils::makeUnique<Open>(
 				compositor.getInstance().getVulkan(),
 				compositor.getVideoMode().getFrameDescriptor(),
-				depthStencilFormat,
+				depthStencilFormat.value(),
 				camera
 			);
 		}
@@ -632,13 +642,13 @@ struct CompositorImpl {
 		assert(&owner.get() == &compositor);
 
 		if(compositor.isOpen()) {
-			const auto isValid = static_cast<bool>(videoMode);
+			const auto isValid = static_cast<bool>(videoMode) && static_cast<bool>(depthStencilFormat);
 
 			if(opened && isValid) {
 				//Video mode remains valid
 				opened->recreate(
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat,
+					depthStencilFormat.value(),
 					camera
 				);
 			} else if(opened && !isValid) {
@@ -650,7 +660,7 @@ struct CompositorImpl {
 				opened = Utils::makeUnique<Open>(
 					compositor.getInstance().getVulkan(),
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat,
+					depthStencilFormat.value(),
 					camera
 				);
 			}
@@ -704,6 +714,24 @@ struct CompositorImpl {
 	}
 
 
+	void setDepthStencilFormatLimits(Utils::Limit<DepthStencilFormat> limit) {
+		depthStencilFormatLimits = std::move(limit);
+		updateDepthStencilFormat();
+	}
+
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormatLimits() const {
+		return depthStencilFormatLimits;
+	}
+
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormatCompatibility() const {
+		return depthStencilFormatCompatibility;
+	}
+
+	const Utils::Limit<DepthStencilFormat>&	getDepthStencilFormat() const {
+		return depthStencilFormat;
+	}
+
+
 	static vk::RenderPass getRenderPass(const Graphics::Vulkan& vulkan, 
 										const Graphics::Frame::Descriptor& frameDesc,
 										DepthStencilFormat depthStencilFmt )
@@ -754,6 +782,12 @@ private:
 		};
 	}
 
+	void updateDepthStencilFormat() {
+		auto& compositor = owner.get();
+		Utils::MustBe<DepthStencilFormat>(depthStencilFormatCompatibility.intersect(depthStencilFormatCompatibility).lowest());
+		videoModeCallback(compositor, compositor.getVideoMode()); //Force recreation if needed
+	}
+
 };
 
 
@@ -764,8 +798,9 @@ private:
 
 Compositor::Compositor(	Instance& instance, 
 						std::string name, 
-						VideoMode videoMode )
-	: Utils::Pimpl<CompositorImpl>({}, *this)
+						VideoMode videoMode,
+						Utils::Limit<DepthStencilFormat> depthStencil )
+	: Utils::Pimpl<CompositorImpl>({}, *this, instance.getVulkan(), std::move(depthStencil))
 	, ZuazoBase(instance, 
 				std::move(name),
 				PadRef((*this)->videoOut),
