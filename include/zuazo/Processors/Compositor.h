@@ -67,10 +67,10 @@ public:
 	};
 
 	explicit Camera(const Math::Transformf& trf = Math::Transformf(),
-					Projection projection		= Projection::FRUSTUM,
-					float fov					= 45.0f,
-					float nearClip				= 1.0f,
-					float farClip 				= 1e6f );
+					Projection projection		= Projection::ORTHOGONAL,
+					float fov					= 0.0f, //Unused for orthogonal
+					float nearClip				= -10e3,
+					float farClip 				= +10e3 );
 	Camera(const Camera& other);
 	~Camera();
 
