@@ -14,7 +14,6 @@ namespace Zuazo {
 class LayerData {
 public:
 	using CommandBuffer = std::shared_ptr<const Graphics::CommandBuffer>;
-	using RenderingStage = Processors::Compositor::RenderingStage;
 
 	LayerData() = default;
 	LayerData(const LayerData& other) = default;
@@ -30,16 +29,12 @@ public:
 	void					setAveragePosition(const Math::Vec4f& pos);
 	const Math::Vec4f&		getAveragePosition() const;
 
-	void					setRenderingStage(RenderingStage stage);
-	RenderingStage			getRenderingStage() const;
-
 	void					setHasAlpha(bool alpha);
 	bool					getHasAlpha() const;
 
 private:
 	CommandBuffer			m_commandBuffer;
 	Math::Vec4f				m_averagePosition;
-	RenderingStage			m_stage;
 	bool					m_hasAlpha;
 
 };

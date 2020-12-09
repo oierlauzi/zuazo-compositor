@@ -20,15 +20,6 @@ inline const Math::Vec4f& LayerData::getAveragePosition() const {
 }
 
 
-inline void LayerData::setRenderingStage(RenderingStage stage) {
-	m_stage = stage;
-}
-
-inline LayerData::RenderingStage LayerData::getRenderingStage() const {
-	return m_stage;
-}
-
-
 inline void LayerData::setHasAlpha(bool alpha) {
 	m_hasAlpha = alpha;
 }

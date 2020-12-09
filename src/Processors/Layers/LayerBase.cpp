@@ -1,57 +1,98 @@
 #include <zuazo/Processors/Layers/LayerBase.h>
 
 #include <zuazo/Processors/Compositor.h>
+#include <zuazo/Utils/StaticId.h>
 
 #include <utility>
 
 namespace Zuazo::Processors::Layers {
 
 struct LayerBase::Impl {
-	std::reference_wrapper<const Graphics::Vulkan> 	vulkan; 
-	Graphics::Frame::Descriptor 					frameDescriptor;
-	DepthStencilFormat 								depthStencilFormat;
-	RenderPassCallback								renderPassCallback;
+	const RendererBase*								renderer;
+
+	Math::Transformf								transform;
+	float											opacity;
+	BlendingMode									blendingMode;
 
 	vk::RenderPass									renderPass;
-	vk::DescriptorSetLayout							baseDescriptorSet;
+	uint32_t										attachmentCount;
 
-	Impl(	const Graphics::Vulkan& vulkan, 
-			const Graphics::Frame::Descriptor& frameDesc, 
-			DepthStencilFormat depthStencil,
+	TransformCallback								transformCallback;
+	OpacityCallback									opacityCallback;
+	BlendingModeCallback							blendingModeCallback;
+	RenderPassCallback								renderPassCallback;
+
+
+	Impl(	const RendererBase* renderer,
+			TransformCallback transformCbk,
+			OpacityCallback opacityCbk,
+			BlendingModeCallback blendingModeCbk,
 			RenderPassCallback renderPassCbk )
-		: vulkan(vulkan)
-		, frameDescriptor(frameDesc)
-		, depthStencilFormat(depthStencil)
+		: renderer(renderer)
+		, transform()
+		, opacity(1.0f)
+		, blendingMode(BlendingMode::OPACITY)
+		, renderPass(renderer ? renderer->getRenderPass() : vk::RenderPass())
+		, attachmentCount(1) //TODO
+		, transformCallback(std::move(transformCbk))
+		, opacityCallback(std::move(opacityCbk))
+		, blendingModeCallback(std::move(blendingModeCbk))
 		, renderPassCallback(std::move(renderPassCbk))
-		, renderPass(Compositor::getRenderPass(vulkan, frameDescriptor, depthStencilFormat))
-		, baseDescriptorSet(Compositor::getDescriptorSetLayout(vulkan))
 	{
 	}
 
 	~Impl() = default;
 
 
-	void setFramebufferLayout(	LayerBase& base,
-								const Graphics::Frame::Descriptor& frameDesc,
-								DepthStencilFormat depthStencil)
-	{
-		frameDescriptor = frameDesc;
-		depthStencilFormat = depthStencil;
+	void setRenderer(LayerBase& base, const RendererBase* rend) {
+		renderer = rend;
+		const auto rendPass = renderer ? renderer->getRenderPass() : vk::RenderPass();
 
-		const auto newRenderPass = Compositor::getRenderPass(vulkan, frameDescriptor, depthStencilFormat);
-		if(newRenderPass != renderPass) {
-			renderPass = newRenderPass;
-			Utils::invokeIf(renderPassCallback, base, renderPass);
+		if(renderPass != rendPass) {
+			renderPass = rendPass;
+			attachmentCount = 1; //TODO
+			Utils::invokeIf(renderPassCallback, base, renderPass, attachmentCount);
 		}
 	}
 
-
-	const Graphics::Frame::Descriptor& getFramebufferFrameDescriptor() const {
-		return frameDescriptor;
+	const RendererBase* getRenderer() const {
+		return renderer;
 	}
 
-	DepthStencilFormat getFramebufferDepthStencilFormat() const {
-		return depthStencilFormat;
+
+	void setTransform(LayerBase& base, const Math::Transformf& trans) {
+		if(transform != trans) {
+			transform = trans;
+			Utils::invokeIf(transformCallback, base, transform);
+		}
+	}
+	
+	const Math::Transformf& getTransform() const {
+		return transform;
+	}
+	
+	
+	void setOpacity(LayerBase& base, float opa) {
+		if(opacity != opa) {
+			opacity = opa;
+			Utils::invokeIf(opacityCallback, base, opacity);
+		}
+	}
+
+	float getOpacity() const {
+		return opacity;
+	}
+
+
+	void setBlendingMode(LayerBase& base, BlendingMode mode) {
+		if(blendingMode != mode) {
+			blendingMode = mode;
+			Utils::invokeIf(blendingModeCallback, base, blendingMode);
+		}
+	}
+
+	BlendingMode getBlendingMode() const {
+		return blendingMode;
 	}
 
 
@@ -59,8 +100,36 @@ struct LayerBase::Impl {
 		return renderPass;
 	}
 
-	vk::DescriptorSetLayout getBaseDescriptorSetLayout() const {
-		return baseDescriptorSet;
+	uint32_t getColorAttachmentCount() const {
+		return attachmentCount;
+	}
+
+
+
+	void setTransformCallback(TransformCallback cbk) {
+		transformCallback = std::move(cbk);
+	}
+
+	const TransformCallback& getTransformCallback() const {
+		return transformCallback;
+	}
+
+	
+	void setOpacityCallback(OpacityCallback cbk) {
+		opacityCallback = std::move(cbk);
+	}
+
+	const OpacityCallback& getOpacityCallback() const {
+		return opacityCallback;
+	}
+
+	
+	void setBlendingModeCallback(BlendingModeCallback cbk) {
+		blendingModeCallback = std::move(cbk);
+	}
+
+	const BlendingModeCallback& getBlendingModeCallback() const {
+		return blendingModeCallback;
 	}
 
 
@@ -71,15 +140,18 @@ struct LayerBase::Impl {
 	const RenderPassCallback& getRenderPassCallback() const {
 		return renderPassCallback;
 	}
-		
+
 };
 
 
-LayerBase::LayerBase(	const Graphics::Vulkan& vulkan, 
-						const Graphics::Frame::Descriptor& frameDesc, 
-						DepthStencilFormat depthStencil,
+LayerBase::LayerBase(	const RendererBase* renderer,
+						TransformCallback transformCbk,
+						OpacityCallback opacityCbk,
+						BlendingModeCallback blendingModeCbk,
 						RenderPassCallback renderPassCbk )
-	: m_impl({}, vulkan, frameDesc, depthStencil, std::move(renderPassCbk))
+	: m_impl(	{}, renderer,
+				std::move(transformCbk), std::move(opacityCbk), 
+				std::move(blendingModeCbk), std::move(renderPassCbk) )
 {
 }
 
@@ -90,29 +162,77 @@ LayerBase::~LayerBase() = default;
 LayerBase& LayerBase::operator=(LayerBase&& other) = default;
 
 
+void LayerBase::setRenderer(const RendererBase* renderer) {
+	m_impl->setRenderer(*this, renderer);
+}
 
-void LayerBase::setFramebufferLayout(	const Graphics::Frame::Descriptor& frameDesc,
-										DepthStencilFormat depthStencil)
-{
-	m_impl->setFramebufferLayout(*this, frameDesc, depthStencil);
+const RendererBase* LayerBase::getRenderer() const {
+	return m_impl->getRenderer();
 }
 
 
-const Graphics::Frame::Descriptor& LayerBase::getFramebufferFrameDescriptor() const {
-	return m_impl->getFramebufferFrameDescriptor();
+void LayerBase::setTransform(const Math::Transformf& trans) {
+	m_impl->setTransform(*this, trans);
 }
 
-DepthStencilFormat LayerBase::getFramebufferDepthStencilFormat() const {
-	return m_impl->getFramebufferDepthStencilFormat();
+const Math::Transformf& LayerBase::getTransform() const {
+	return m_impl->getTransform();
 }
+
+
+void LayerBase::setOpacity(float opa) {
+	m_impl->setOpacity(*this, opa);
+}
+
+float LayerBase::getOpacity() const {
+	return m_impl->getOpacity();
+}
+
+
+void LayerBase::setBlendingMode(BlendingMode mode) {
+	m_impl->setBlendingMode(*this, mode);
+}
+
+BlendingMode LayerBase::getBlendingMode() const {
+	return m_impl->getBlendingMode();
+}
+
 
 
 vk::RenderPass LayerBase::getRenderPass() const {
 	return m_impl->getRenderPass();
 }
 
-vk::DescriptorSetLayout LayerBase::getBaseDescriptorSetLayout() const {
-	return m_impl->getBaseDescriptorSetLayout();
+uint32_t LayerBase::getColorAttachmentCount() const {
+	return m_impl->getColorAttachmentCount();
+}
+
+
+
+void LayerBase::setTransformCallback(TransformCallback cbk) {
+	m_impl->setTransformCallback(std::move(cbk));
+}
+
+const LayerBase::TransformCallback& LayerBase::getTransformCallback() const {
+	return m_impl->getTransformCallback();
+}
+
+
+void LayerBase::setOpacityCallback(OpacityCallback cbk) {
+	m_impl->setOpacityCallback(std::move(cbk));
+}
+
+const LayerBase::OpacityCallback& LayerBase::getOpacityCallback() const {
+	return m_impl->getOpacityCallback();
+}
+
+
+void LayerBase::setBlendingModeCallback(BlendingModeCallback cbk) {
+	m_impl->setBlendingModeCallback(std::move(cbk));
+}
+
+const LayerBase::BlendingModeCallback& LayerBase::getBlendingModeCallback() const {
+	return m_impl->getBlendingModeCallback();
 }
 
 
@@ -123,7 +243,5 @@ void LayerBase::setRenderPassCallback(RenderPassCallback cbk) {
 const LayerBase::RenderPassCallback& LayerBase::getRenderPassCallback() const {
 	return m_impl->getRenderPassCallback();
 }
-
-
 
 }
