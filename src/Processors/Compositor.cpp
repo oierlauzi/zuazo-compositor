@@ -36,6 +36,20 @@ struct CompositorImpl {
 
 		using CommandPool = Utils::Pool<Graphics::CommandBuffer>;
 
+		struct Resources {
+			Resources(	Graphics::StagedBuffer uniformBuffer,
+						vk::UniqueDescriptorPool descriptorPool )
+				: uniformBuffer(std::move(uniformBuffer))
+				, descriptorPool(std::move(descriptorPool))
+			{
+			}
+
+			~Resources() = default;
+
+			Graphics::StagedBuffer								uniformBuffer;
+			vk::UniqueDescriptorPool							descriptorPool;
+		};
+
 		struct Cache {
 			std::vector<Compositor::LayerRef>			layers;
 		};
@@ -43,8 +57,7 @@ struct CompositorImpl {
 		const Graphics::Vulkan& 					vulkan;
 
 		UniformBufferLayout							uniformBufferLayout;
-		Graphics::StagedBuffer						uniformBuffer;
-		vk::UniqueDescriptorPool					descriptorPool;
+		std::shared_ptr<Resources>					resources;
 		vk::DescriptorSet							descriptorSet;
 		vk::PipelineLayout							pipelineLayout;
 
@@ -57,7 +70,6 @@ struct CompositorImpl {
 		Utils::Area									uniformFlushArea;
 		vk::PipelineStageFlags						uniformFlushStages;
 		Cache										cache;
-		std::shared_ptr<const Graphics::Frame>		lastFrame; //Last defined to be first destroyed
 
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& frameDesc,
@@ -65,9 +77,9 @@ struct CompositorImpl {
 				const Compositor::Camera& cam )
 			: vulkan(vulkan)
 			, uniformBufferLayout(createUniformBufferLayout(vulkan))
-			, uniformBuffer(createUniformBuffer(vulkan, uniformBufferLayout))
-			, descriptorPool(createDescriptorPool(vulkan))
-			, descriptorSet(createDescriptorSet(vulkan, *descriptorPool))
+			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan, uniformBufferLayout),
+														createDescriptorPool(vulkan) ))
+			, descriptorSet(createDescriptorSet(vulkan, *(resources->descriptorPool)))
 			, pipelineLayout(createPipelineLayout(vulkan))
 
 			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
@@ -85,7 +97,7 @@ struct CompositorImpl {
 		}
 
 		~Open() {
-			uniformBuffer.waitCompletion(vulkan);
+			resources->uniformBuffer.waitCompletion(vulkan);
 		}
 
 		void recreate(	const Graphics::Frame::Descriptor& frameDesc,
@@ -157,6 +169,9 @@ struct CompositorImpl {
 			auto result = drawtable.acquireFrame();
 			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
 
+			//Add the compositor related dependencies to it
+			commandBuffer->addDependencies({resources});
+
 			//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
 			std::stable_sort(
 				cache.layers.begin(), cache.layers.end(),
@@ -180,7 +195,7 @@ struct CompositorImpl {
 			//Execute all the command buffers gathered from the layers
 			if(!cache.layers.empty()) {
 				//Flush the uniform buffer, as it will be used
-				uniformBuffer.flushData(
+				resources->uniformBuffer.flushData(
 					vulkan,
 					uniformFlushArea,
 					vulkan.getGraphicsQueueIndex(),
@@ -219,7 +234,6 @@ struct CompositorImpl {
 			//Clear cache. This should not deallocate vectors
 			cache.layers.clear(); 
 
-			lastFrame = result;
 			return result;
 		}
 
@@ -253,9 +267,9 @@ struct CompositorImpl {
 		}
 
 		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
-			uniformBuffer.waitCompletion(vulkan);
+			resources->uniformBuffer.waitCompletion(vulkan);
 
-			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(uniformBuffer.data())));
+			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(resources->uniformBuffer.data())));
 			mtx = cam.calculateMatrix(drawtable.getFrameDescriptor().calculateSize());
 			
 			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
@@ -263,10 +277,10 @@ struct CompositorImpl {
 		}
 
 		void updateColorTransferUniform() {
-			uniformBuffer.waitCompletion(vulkan);
+			resources->uniformBuffer.waitCompletion(vulkan);
 			
 			std::memcpy(
-				uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].begin(uniformBuffer.data()),
+				uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].begin(resources->uniformBuffer.data()),
 				colorTransfer.data(),
 				uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].size()
 			);
@@ -278,14 +292,14 @@ struct CompositorImpl {
 		void writeDescriptorSets() {
 			const std::array projectionMatrixBuffers = {
 				vk::DescriptorBufferInfo(
-					uniformBuffer.getBuffer(),															//Buffer
+					resources->uniformBuffer.getBuffer(),												//Buffer
 					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].offset(),	//Offset
 					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].size()		//Size
 				)
 			};
 			const std::array colorTransferBuffers = {
 				vk::DescriptorBufferInfo(
-					uniformBuffer.getBuffer(),														//Buffer
+					resources->uniformBuffer.getBuffer(),											//Buffer
 					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].offset(),	//Offset
 					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].size()		//Size
 				)
