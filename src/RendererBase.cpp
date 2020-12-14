@@ -16,6 +16,7 @@ struct RendererBase::Impl {
 	Utils::Limit<DepthStencilFormat>					depthStencilFmt;
 
 	Camera												camera;	
+	std::vector<LayerRef>								layers;
 
 	DepthStencilFormatCallback							depthStencilFmtCompatibilityCbk;
 	std::array<DepthStencilFormatCallback, DSCBK_COUNT>	depthStencilFmtCbk;
@@ -31,6 +32,7 @@ struct RendererBase::Impl {
 		, depthStencilFmtCompatibility()
 		, depthStencilFmt()
 		, camera()
+		, layers()
 		, depthStencilFmtCompatibilityCbk()
 		, depthStencilFmtCbk{ std::move(internalDepthStencilFormatCbk) }
 		, cameraCbk(std::move(cameraCbk))
@@ -92,6 +94,16 @@ struct RendererBase::Impl {
 	}
 
 
+	void setLayers(Utils::BufferView<const LayerRef> l) {
+		layers.clear();
+		layers.insert(layers.cend(), l.cbegin(), l.cend());
+	}
+
+	Utils::BufferView<const LayerRef> getLayers() const {
+		return Utils::BufferView<const LayerRef>(layers.data(), layers.size());
+	}
+
+
 	vk::RenderPass getRenderPass(const RendererBase& base) const {
 		vk::RenderPass result = {};
 
@@ -101,6 +113,10 @@ struct RendererBase::Impl {
 
 		return result;
 	}
+
+
+
+
 
 	static vk::DescriptorSetLayout getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 		static const Utils::StaticId id;
@@ -250,6 +266,15 @@ void RendererBase::setCamera(const Camera& cam) {
 
 const RendererBase::Camera& RendererBase::getCamera() const {
 	return m_impl->getCamera();
+}
+
+
+void RendererBase::setLayers(Utils::BufferView<const LayerRef> layers) {
+	m_impl->setLayers(layers);
+}
+
+Utils::BufferView<const RendererBase::LayerRef> RendererBase::getLayers() const {
+	return m_impl->getLayers();
 }
 
 

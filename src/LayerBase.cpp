@@ -1,11 +1,10 @@
-#include <zuazo/Processors/Layers/LayerBase.h>
+#include <zuazo/LayerBase.h>
 
-#include <zuazo/Processors/Compositor.h>
 #include <zuazo/Utils/StaticId.h>
 
 #include <utility>
 
-namespace Zuazo::Processors::Layers {
+namespace Zuazo {
 
 struct LayerBase::Impl {
 	const RendererBase*								renderer;
@@ -15,11 +14,11 @@ struct LayerBase::Impl {
 	BlendingMode									blendingMode;
 
 	vk::RenderPass									renderPass;
-	uint32_t										attachmentCount;
 
 	TransformCallback								transformCallback;
 	OpacityCallback									opacityCallback;
 	BlendingModeCallback							blendingModeCallback;
+	DrawCallback									drawCallback;
 	RenderPassCallback								renderPassCallback;
 
 
@@ -27,16 +26,17 @@ struct LayerBase::Impl {
 			TransformCallback transformCbk,
 			OpacityCallback opacityCbk,
 			BlendingModeCallback blendingModeCbk,
+			DrawCallback drawCbk,
 			RenderPassCallback renderPassCbk )
 		: renderer(renderer)
 		, transform()
 		, opacity(1.0f)
 		, blendingMode(BlendingMode::OPACITY)
 		, renderPass(renderer ? renderer->getRenderPass() : vk::RenderPass())
-		, attachmentCount(1) //TODO
 		, transformCallback(std::move(transformCbk))
 		, opacityCallback(std::move(opacityCbk))
 		, blendingModeCallback(std::move(blendingModeCbk))
+		, drawCallback(std::move(drawCbk))
 		, renderPassCallback(std::move(renderPassCbk))
 	{
 	}
@@ -50,8 +50,7 @@ struct LayerBase::Impl {
 
 		if(renderPass != rendPass) {
 			renderPass = rendPass;
-			attachmentCount = 1; //TODO
-			Utils::invokeIf(renderPassCallback, base, renderPass, attachmentCount);
+			Utils::invokeIf(renderPassCallback, base, renderPass);
 		}
 	}
 
@@ -96,14 +95,14 @@ struct LayerBase::Impl {
 	}
 
 
+	void draw(const LayerBase& base, Graphics::CommandBuffer& cmd) const {
+		Utils::invokeIf(drawCallback, base, cmd);
+	}
+
+
 	vk::RenderPass getRenderPass() const {
 		return renderPass;
 	}
-
-	uint32_t getColorAttachmentCount() const {
-		return attachmentCount;
-	}
-
 
 
 	void setTransformCallback(TransformCallback cbk) {
@@ -132,6 +131,13 @@ struct LayerBase::Impl {
 		return blendingModeCallback;
 	}
 
+	void setDrawCallback(DrawCallback cbk) {
+		drawCallback = std::move(cbk);
+	}
+
+	const DrawCallback& getDrawCallback() const {
+		return drawCallback;
+	}
 
 	void setRenderPassCallback(RenderPassCallback cbk) {
 		renderPassCallback = std::move(cbk);
@@ -148,10 +154,11 @@ LayerBase::LayerBase(	const RendererBase* renderer,
 						TransformCallback transformCbk,
 						OpacityCallback opacityCbk,
 						BlendingModeCallback blendingModeCbk,
+						DrawCallback drawCbk,
 						RenderPassCallback renderPassCbk )
-	: m_impl(	{}, renderer,
-				std::move(transformCbk), std::move(opacityCbk), 
-				std::move(blendingModeCbk), std::move(renderPassCbk) )
+	: m_impl(	{}, renderer, std::move(transformCbk), 
+				std::move(opacityCbk), std::move(blendingModeCbk), 
+				std::move(drawCbk), std::move(renderPassCbk) )
 {
 }
 
@@ -198,15 +205,14 @@ BlendingMode LayerBase::getBlendingMode() const {
 }
 
 
+void LayerBase::draw(Graphics::CommandBuffer& cmd) const {
+	m_impl->draw(*this, cmd);
+}
+
 
 vk::RenderPass LayerBase::getRenderPass() const {
 	return m_impl->getRenderPass();
 }
-
-uint32_t LayerBase::getColorAttachmentCount() const {
-	return m_impl->getColorAttachmentCount();
-}
-
 
 
 void LayerBase::setTransformCallback(TransformCallback cbk) {
@@ -233,6 +239,15 @@ void LayerBase::setBlendingModeCallback(BlendingModeCallback cbk) {
 
 const LayerBase::BlendingModeCallback& LayerBase::getBlendingModeCallback() const {
 	return m_impl->getBlendingModeCallback();
+}
+
+
+void LayerBase::setDrawCallback(DrawCallback cbk) {
+	m_impl->setDrawCallback(std::move(cbk));
+}
+
+const LayerBase::DrawCallback& LayerBase::getDrawCallback() const {
+	return m_impl->getDrawCallback();
 }
 
 

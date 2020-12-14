@@ -1,28 +1,30 @@
 #pragma once
 
-#include "../../RendererBase.h"
+#include "RendererBase.h"
 
 #include <zuazo/BlendingMode.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Graphics/Vulkan.h>
-#include <zuazo/Graphics/Frame.h>
+#include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Math/Transform.h>
 
 #include <functional>
 
-namespace Zuazo::Processors::Layers {
+namespace Zuazo {
 
 class LayerBase {
 public:
 	using TransformCallback = std::function<void(LayerBase&, const Math::Transformf&)>;
 	using OpacityCallback = std::function<void(LayerBase&, float)>;
 	using BlendingModeCallback = std::function<void(LayerBase&, BlendingMode)>;
-	using RenderPassCallback = std::function<void(LayerBase&, vk::RenderPass, uint32_t)>;
+	using DrawCallback = std::function<void(const LayerBase&, Graphics::CommandBuffer&)>;
+	using RenderPassCallback = std::function<void(LayerBase&, vk::RenderPass)>;
 
 	LayerBase(	const RendererBase* renderer,
 				TransformCallback transformCbk = {},
 				OpacityCallback opacityCbk = {},
 				BlendingModeCallback blendingModeCbk = {},
+				DrawCallback drawCbk = {},
 				RenderPassCallback renderPassCbk = {} );
 	LayerBase(const LayerBase& other) = delete;
 	LayerBase(LayerBase&& other);
@@ -43,8 +45,9 @@ public:
 	void								setBlendingMode(BlendingMode mode);
 	BlendingMode						getBlendingMode() const;
 
+	void								draw(Graphics::CommandBuffer& cmd) const;
+
 	vk::RenderPass						getRenderPass() const;
-	uint32_t							getColorAttachmentCount() const;
 
 protected:
 	void								setTransformCallback(TransformCallback cbk);
@@ -55,6 +58,9 @@ protected:
 
 	void								setBlendingModeCallback(BlendingModeCallback cbk);
 	const BlendingModeCallback&			getBlendingModeCallback() const;
+
+	void								setDrawCallback(DrawCallback cbk);
+	const DrawCallback&					getDrawCallback() const;
 
 	void								setRenderPassCallback(RenderPassCallback cbk);
 	const RenderPassCallback&			getRenderPassCallback() const;

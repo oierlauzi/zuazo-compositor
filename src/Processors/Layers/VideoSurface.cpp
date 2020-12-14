@@ -69,12 +69,10 @@ struct VideoSurfaceImpl {
 		Graphics::Frame::Geometry							geometry;
 		vk::DescriptorSet									descriptorSet;
 
+		vk::RenderPass										renderPass;
 		vk::Filter											filter;
 		vk::PipelineLayout									pipelineLayout;
 		std::shared_ptr<vk::UniquePipeline>					pipeline;
-
-		Graphics::CommandBufferPool							commandBufferPool;
-		Utils::Pool<LayerData>								layerDataPool;
 
 		Math::Mat4x4f&										uniformModelMatrix;
 		float&												uniformOpacity;
@@ -85,8 +83,7 @@ struct VideoSurfaceImpl {
 				Math::Vec2f size,
 				ScalingMode scalingMode,
 				ScalingFilter scalingFilter,
-				vk::RenderPass renderPass,
-				uint32_t attachmentCount,
+				vk::RenderPass rendPass,
 				BlendingMode blendingMode,
 				const Math::Transformf& transform,
 				float opacity ) 
@@ -97,35 +94,36 @@ struct VideoSurfaceImpl {
 														createDescriptorPool(vulkan) ))
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
+			, renderPass(rendPass)
 			, filter(Graphics::toVulkan(scalingFilter))
 			, pipelineLayout(createPipelineLayout(vulkan, filter))
-			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, attachmentCount, blendingMode)))
-			, commandBufferPool(createCommandBufferPool(vulkan))
-			, layerDataPool()
+			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
 			, uniformModelMatrix(getModelMatrix(uniformBufferLayout, resources->uniformBuffer))
 			, uniformOpacity(getOpacity(uniformBufferLayout, resources->uniformBuffer))
 			, uniformFlushArea()
 			, uniformFlushStages()
 		{
+			writeDescriptorSets();
 			updateModelMatrixUniform(transform);
 			updateOpacityUniform(opacity);
 		}
 
-		~Open() = default;
-
-		void recreate(	ScalingFilter scalingFilter,
-						vk::RenderPass renderPass,
-						uint32_t attachmentCount,
-						BlendingMode blendingMode ) 
-		{
-			filter = Graphics::toVulkan(scalingFilter);
-			pipelineLayout = createPipelineLayout(vulkan, filter);
-			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, attachmentCount, blendingMode));
+		~Open() {
+			resources->vertexBuffer.waitCompletion(vulkan);
+			resources->uniformBuffer.waitCompletion(vulkan);
 		}
 
-		LayerDataStream process(const Video& frame) {
-			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
-			assert(commandBuffer);
+		void recreate(	ScalingFilter scalingFilter,
+						vk::RenderPass rendPass,
+						BlendingMode blendingMode ) 
+		{
+			renderPass = rendPass;
+			filter = Graphics::toVulkan(scalingFilter);
+			pipelineLayout = createPipelineLayout(vulkan, filter);
+			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
+		}
+
+		void draw(Graphics::CommandBuffer& cmd, const Video& frame) {
 			assert(resources);			
 			assert(pipeline);
 			assert(frame);
@@ -153,23 +151,16 @@ struct VideoSurfaceImpl {
 			uniformFlushArea = {};
 			uniformFlushStages = {};
 
-			//Begin the command buffer
-			constexpr vk::CommandBufferUsageFlags beginFlags =
-				vk::CommandBufferUsageFlagBits::eOneTimeSubmit | 
-				vk::CommandBufferUsageFlagBits::eRenderPassContinue ;
-			constexpr vk::CommandBufferBeginInfo beginInfo(beginFlags, nullptr);
-			commandBuffer->begin(beginInfo);
-
 			//Bind the pipeline and its descriptor sets
-			commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
 
-			commandBuffer->bindVertexBuffers(
+			cmd.bindVertexBuffers(
 				VERTEX_BUFFER_BINDING,											//Binding
 				resources->vertexBuffer.getBuffer(),							//Vertex buffers
 				0UL																//Offsets
 			);
 
-			commandBuffer->bindDescriptorSets(
+			cmd.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
 				pipelineLayout,													//Pipeline layout
 				DESCRIPTOR_SET_VIDEOSURFACE,									//First index
@@ -178,40 +169,22 @@ struct VideoSurfaceImpl {
 			);
 
 			frame->bind(
-				commandBuffer->getCommandBuffer(), 								//Commandbuffer
+				cmd.getCommandBuffer(), 										//Commandbuffer
 				pipelineLayout, 												//Pipeline layout
 				DESCRIPTOR_SET_FRAME, 											//Descriptor set index
 				filter															//Filter
 			);
 
 			//Draw the frame and finish recording
-			commandBuffer->draw(
+			cmd.draw(
 				Graphics::Frame::Geometry::VERTEX_COUNT, 						//Vertex count
 				1, 																//Instance count
 				0, 																//First vertex
 				0																//First instance
 			);
-			commandBuffer->end();
 
 			//Add the dependencies to the command buffer
-			const std::array<Graphics::CommandBuffer::Dependency, 3> dependencies = {
-				resources,
-				pipeline,
-				frame
-			};
-			commandBuffer->setDependencies(dependencies);
-			
-
-			//Elaborate the result
-			auto result = layerDataPool.acquire();
-			assert(result);
-
-			result->setCommandBuffer(std::move(commandBuffer));
-			result->setAveragePosition(uniformModelMatrix[3]); //uniformModelMatrix * Math::Vec4f(0.0f, 0.0f, 0.0f, 1.0f)
-			result->setHasAlpha(uniformOpacity != 1.0f || hasAlpha(frame->getDescriptor().getColorFormat()));
-
-			assert(result->getAveragePosition() == uniformModelMatrix * Math::Vec4f(0.0f, 0.0f, 0.0f, 1.0f));
-			return result;
+			cmd.addDependencies({ resources, pipeline, frame });			
 		}
 
 		void updateModelMatrixUniform(const Math::Transformf& transform) {
@@ -252,7 +225,7 @@ struct VideoSurfaceImpl {
 			};
 
 			const std::array writeDescriptorSets = {
-				vk::WriteDescriptorSet( //Viewport UBO
+				vk::WriteDescriptorSet( //Model matrix UBO
 					descriptorSet,											//Descriptor set
 					DESCRIPTOR_BINDING_MODEL_MATRIX,						//Binding
 					0, 														//Index
@@ -402,7 +375,6 @@ struct VideoSurfaceImpl {
 		static vk::UniquePipeline createPipeline(	const Graphics::Vulkan& vulkan,
 													vk::PipelineLayout layout,
 													vk::RenderPass renderPass,
-													uint32_t colorAttachmentCount,
 													BlendingMode blendingMode )
 		{
 			static //So that its ptr can be used as an identifier
@@ -414,13 +386,19 @@ struct VideoSurfaceImpl {
 
 			//Try to retrive modules from cache
 			auto vertexShader = vulkan.createShaderModule(vertId);
-			auto fragmentShader = vulkan.createShaderModule(fragId);
-
-			if(!vertexShader || !fragmentShader) {
-				//Modules aren't in cache. Create them
+			if(!vertexShader) {
+				//Modules isn't in cache. Create it
 				vertexShader = vulkan.createShaderModule(vertId, video_surface_vert);
+			}
+
+			auto fragmentShader = vulkan.createShaderModule(fragId);
+			if(!fragmentShader) {
+				//Modules isn't in cache. Create it
 				fragmentShader = vulkan.createShaderModule(fragId, video_surface_frag);
 			}
+
+			assert(vertexShader);
+			assert(fragmentShader);
 
 			constexpr auto SHADER_ENTRY_POINT = "main";
 			const std::array shaderStages = {
@@ -506,10 +484,9 @@ struct VideoSurfaceImpl {
 				0.0f, 0.0f											//min, max depth bounds
 			);
 
-			const std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(
-				colorAttachmentCount,
+			const std::array colorBlendAttachments = {
 				Graphics::toVulkan(blendingMode)
-			);
+			};
 
 			const vk::PipelineColorBlendStateCreateInfo colorBlend(
 				{},													//Flags
@@ -549,19 +526,6 @@ struct VideoSurfaceImpl {
 			return vulkan.createGraphicsPipeline(createInfo);
 		}
 
-		static Graphics::CommandBufferPool createCommandBufferPool(const Graphics::Vulkan& vulkan) {
-			constexpr vk::CommandPoolCreateFlags createFlags = 
-				vk::CommandPoolCreateFlagBits::eResetCommandBuffer |
-				vk::CommandPoolCreateFlagBits::eTransient ;
-
-			return Graphics::CommandBufferPool(
-				vulkan,
-				createFlags,
-				vulkan.getGraphicsQueueIndex(),
-				vk::CommandBufferLevel::eSecondary
-			);
-		}
-
 		static Math::Mat4x4f& getModelMatrix(	const UniformBufferLayout& uniformBufferLayout, 
 												Graphics::StagedBuffer& uniformBuffer ) 
 		{
@@ -579,12 +543,10 @@ struct VideoSurfaceImpl {
 	};
 
 	using Input = Signal::Input<Video>;
-	using Output = Signal::Output<LayerDataStream>;
 
 	std::reference_wrapper<VideoSurface>	owner;
 
 	Input									videoIn;
-	Output									layerOut;
 
 	Math::Vec2f								size;
 
@@ -594,7 +556,6 @@ struct VideoSurfaceImpl {
 	VideoSurfaceImpl(VideoSurface& owner, Math::Vec2f size)
 		: owner(owner)
 		, videoIn()
-		, layerOut(std::string(Signal::makeOutputName<LayerDataStream>()), createPullCallback(this))
 		, size(size)
 	{
 	}
@@ -618,7 +579,6 @@ struct VideoSurfaceImpl {
 					videoSurface.getScalingMode(),
 					videoSurface.getScalingFilter(),
 					videoSurface.getRenderPass(),
-					videoSurface.getColorAttachmentCount(), 
 					videoSurface.getBlendingMode(),
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
@@ -630,22 +590,30 @@ struct VideoSurfaceImpl {
 
 	void close(ZuazoBase& base) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		assert(&owner.get() == &videoSurface);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		
 		videoIn.reset();
-		layerOut.reset();
 		opened.reset();
 	}
 
-	void update() {
-		if(opened) {
-			if(hasChanged || videoIn.hasChanged()) {
-				const auto& frame = videoIn.pull();
-				layerOut.push(frame ? opened->process(frame) : LayerDataStream());
+	void drawCallback(const LayerBase& base, Graphics::CommandBuffer& cmd) {
+		const auto& videoSurface = static_cast<const VideoSurface&>(base);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
-				//Update the state
-				hasChanged = false;
+		if(opened) {
+			//if(hasChanged || videoIn.hasChanged()) { //TODO has changed in another way
+				
+			//}
+
+			const auto& frame = videoIn.pull();
+			
+			//Draw
+			if(frame) {
+				opened->draw(cmd, frame);
 			}
+
+			//Update the state
+			hasChanged = false;
 		}
 	}
 
@@ -673,12 +641,12 @@ struct VideoSurfaceImpl {
 
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getColorAttachmentCount(), mode, videoSurface.getScalingFilter());
+		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode, videoSurface.getScalingFilter());
 	}
 
-	void renderPassCallback(LayerBase& base, vk::RenderPass renderPass, uint32_t attachmentCount) {
+	void renderPassCallback(LayerBase& base, vk::RenderPass renderPass) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, renderPass, attachmentCount, videoSurface.getBlendingMode(), videoSurface.getScalingFilter());
+		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode(), videoSurface.getScalingFilter());
 	}
 
 	void scalingModeCallback(VideoScalerBase& base, ScalingMode mode) {
@@ -694,7 +662,7 @@ struct VideoSurfaceImpl {
 
 	void scalingFilterCallback(VideoScalerBase& base, ScalingFilter filter) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getColorAttachmentCount(), videoSurface.getBlendingMode(), filter);
+		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getBlendingMode(), filter);
 	}
 
 
@@ -717,7 +685,6 @@ struct VideoSurfaceImpl {
 private:
 	void recreateCallback(	VideoSurface& videoSurface, 
 							vk::RenderPass renderPass,
-							uint32_t attachmentCount,
 							BlendingMode blendingMode,
 							ScalingFilter scalingFilter )
 	{
@@ -733,13 +700,11 @@ private:
 				opened->recreate(
 					scalingFilter,
 					renderPass,
-					attachmentCount,
 					blendingMode
 				);
 			} else if(opened && !isValid) {
 				//It has become invalid
 				videoIn.reset();
-				layerOut.reset();
 				opened.reset();
 			} else if(!opened && isValid) {
 				//It has become valid
@@ -749,7 +714,6 @@ private:
 					videoSurface.getScalingMode(),
 					scalingFilter,
 					renderPass,
-					attachmentCount, 
 					blendingMode,
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
@@ -758,12 +722,6 @@ private:
 
 			hasChanged = true; //Signal rendering if needed
 		}
-	}
-
-	static Output::PullCallback createPullCallback(VideoSurfaceImpl* impl) {
-		return [impl] (Output&) {
-			impl->owner.get().update();
-		};
 	}
 
 };
@@ -779,21 +737,21 @@ VideoSurface::VideoSurface(	Instance& instance,
 	, ZuazoBase(
 		instance, 
 		std::move(name),
-		{ PadRef((*this)->videoIn), PadRef((*this)->layerOut) },
+		{ PadRef((*this)->videoIn) },
 		std::bind(&VideoSurfaceImpl::moved, std::ref(**this), std::placeholders::_1),
 		std::bind(&VideoSurfaceImpl::open, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::update, std::ref(**this)) )
+		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1) )
 	, LayerBase(
 		renderer,
 		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3) )
+		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, VideoScalerBase(
 		std::bind(&VideoSurfaceImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::scalingFilterCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
-	, Signal::ProcessorLayout<Video, LayerDataStream>(makeProxy((*this)->videoIn), makeProxy((*this)->layerOut))
+	, Signal::ConsumerLayout<Video>(makeProxy((*this)->videoIn))
 {
 }
 

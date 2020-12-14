@@ -33,9 +33,6 @@ public:
 	Compositor& 							operator=(const Compositor& other) = delete;
 	Compositor& 							operator=(Compositor&& other);
 
-	void									setLayerCount(size_t count);
-	size_t									getLayerCount() const;
-
 };
 
 }

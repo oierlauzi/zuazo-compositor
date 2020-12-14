@@ -7,12 +7,16 @@
 #include <zuazo/Utils/Limit.h>
 
 #include <functional>
+#include <utility>
 
 namespace Zuazo {
+
+class LayerBase;
 
 class RendererBase {
 public:
 	class Camera;
+	using LayerRef = std::reference_wrapper<const LayerBase>;
 
 	using DepthStencilFormatCallback = std::function<void(RendererBase&, const Utils::Limit<DepthStencilFormat>&)>;
 	using CameraCallback = std::function<void(RendererBase&, const Camera& camera)>;
@@ -50,6 +54,9 @@ public:
 
 	void									setCamera(const Camera& cam);
 	const Camera&							getCamera() const;
+
+	void									setLayers(Utils::BufferView<const LayerRef> layers);
+	Utils::BufferView<const LayerRef>		getLayers() const;
 
 	vk::RenderPass							getRenderPass() const;
 

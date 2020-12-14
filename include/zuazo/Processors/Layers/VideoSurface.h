@@ -1,11 +1,10 @@
 #pragma once
 
-#include "LayerBase.h"
-#include "../../LayerData.h"
+#include "../../LayerBase.h"
 
 #include <zuazo/ZuazoBase.h>
 #include <zuazo/Video.h>
-#include <zuazo/Signal/ProcessorLayout.h>
+#include <zuazo/Signal/ConsumerLayout.h>
 #include <zuazo/Utils/Pimpl.h>
 
 #include <functional>
@@ -18,7 +17,7 @@ class VideoSurface
 	, public ZuazoBase
 	, public LayerBase
 	, public VideoScalerBase
-	, public Signal::ProcessorLayout<Video, LayerDataStream>
+	, public Signal::ConsumerLayout<Video>
 {
 	friend VideoSurfaceImpl;
 public:

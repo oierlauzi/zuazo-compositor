@@ -1,6 +1,6 @@
 #include <zuazo/Processors/Compositor.h>
 
-#include <zuazo/LayerData.h>
+#include <zuazo/LayerBase.h>
 #include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Graphics/StagedBuffer.h>
 #include <zuazo/Graphics/Drawtable.h>
@@ -35,11 +35,9 @@ struct CompositorImpl {
 		using UniformBufferLayout = std::array<Utils::Area, RendererBase::DESCRIPTOR_COUNT>;
 
 		using CommandPool = Utils::Pool<Graphics::CommandBuffer>;
-		using Layers = std::vector<std::reference_wrapper<const LayerData>>;
 
 		struct Cache {
-			std::vector<vk::CommandBuffer>				drawCommandBuffers;
-			std::vector<std::shared_ptr<const void>>	dependencies;
+			std::vector<Compositor::LayerRef>			layers;
 		};
 
 		const Graphics::Vulkan& 					vulkan;
@@ -56,12 +54,10 @@ struct CompositorImpl {
 		
 		std::vector<vk::ClearValue>					clearValues;
 
-		std::shared_ptr<const Graphics::Frame>		lastFrame;
-
-		Layers										layers;
 		Utils::Area									uniformFlushArea;
 		vk::PipelineStageFlags						uniformFlushStages;
 		Cache										cache;
+		std::shared_ptr<const Graphics::Frame>		lastFrame; //Last defined to be first destroyed
 
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& frameDesc,
@@ -87,8 +83,6 @@ struct CompositorImpl {
 			updateProjectionMatrixUniform(cam);
 			updateColorTransferUniform();
 		}
-
-		Open(const Open& other) = delete;
 
 		~Open() {
 			uniformBuffer.waitCompletion(vulkan);
@@ -136,50 +130,14 @@ struct CompositorImpl {
 			updateProjectionMatrixUniform(cam);
 		}
 
-		void addLayer(const LayerData& layer) {
-			layers.push_back(layer);
-		}
-
-		Video draw() {
+		Video draw(Utils::BufferView<const Compositor::LayerRef> layers) {
 			//Cache should have been cleared
-			assert(cache.drawCommandBuffers.empty());
-			assert(cache.dependencies.empty());
+			assert(cache.layers.empty());
 
-			//Obtain a new frame and command buffer
-			auto result = drawtable.acquireFrame();
-			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
+			//Populate layers
+			cache.layers.insert(cache.layers.cend(), layers.cbegin(), layers.cend());
 
-			//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
-			std::stable_sort(
-				layers.begin(), layers.end(),
-				std::bind(&Open::layerComp, std::cref(*this), std::placeholders::_1, std::placeholders::_2)
-			);
-
-			//Obtain all the vulkan command buffers and add them as a dependency
-			for(const auto& layer : layers) {
-				const auto& commandBuffer = layer.get().getCommandBuffer();
-				cache.drawCommandBuffers.push_back(commandBuffer->getCommandBuffer());
-				cache.dependencies.push_back(commandBuffer);
-			}
-
-
-
-			//Begin the commandbuffer
-			constexpr vk::CommandBufferBeginInfo cmdBeginInfo(
-				vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-			);
-			commandBuffer->begin(cmdBeginInfo);
-
-			//Bind all descriptors
-			commandBuffer->bindDescriptorSets(
-				vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
-				pipelineLayout,													//Pipeline layout
-				DESCRIPTOR_SET_COMPOSITOR,									//First index
-				descriptorSet,													//Descriptor sets
-				{}																//Dynamic offsets
-			);
-
-			//Set the dynamic viewport
+			//Obtain the viewports and the scissors
 			const auto extent = Graphics::toVulkan(drawtable.getFrameDescriptor().getResolution());
 			const std::array viewports = {
 				vk::Viewport(
@@ -188,27 +146,39 @@ struct CompositorImpl {
 					0.0f,			1.0f
 				)
 			};
-			commandBuffer->setViewport(0, viewports);
-
-			//Set the dynamic scissor
 			const std::array scissors = {
 				vk::Rect2D(
 					vk::Offset2D(0, 0),
 					extent
 				)
 			};
-			commandBuffer->setScissor(0, scissors);
+
+			//Obtain a new frame and command buffer
+			auto result = drawtable.acquireFrame();
+			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
+
+			//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
+			std::stable_sort(
+				cache.layers.begin(), cache.layers.end(),
+				std::bind(&Open::layerComp, std::cref(*this), std::placeholders::_1, std::placeholders::_2)
+			);
+
+			//Begin the commandbuffer
+			constexpr vk::CommandBufferBeginInfo cmdBeginInfo(
+				vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+			);
+			commandBuffer->begin(cmdBeginInfo);
 
 			//Draw to the command buffer
 			result->beginRenderPass(
 				commandBuffer->getCommandBuffer(),
 				scissors.front(),
 				clearValues, 
-				vk::SubpassContents::eSecondaryCommandBuffers //We'll only call execute:
-			);
+				vk::SubpassContents::eInline
+			);	
 
 			//Execute all the command buffers gathered from the layers
-			if(!cache.drawCommandBuffers.empty()) {
+			if(!cache.layers.empty()) {
 				//Flush the uniform buffer, as it will be used
 				uniformBuffer.flushData(
 					vulkan,
@@ -220,37 +190,48 @@ struct CompositorImpl {
 				uniformFlushArea = {};
 				uniformFlushStages = {};
 
-				//Execute all the command buffers
-				commandBuffer->execute(cache.drawCommandBuffers); 
+				//Bind all descriptors
+				commandBuffer->bindDescriptorSets(
+					vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
+					pipelineLayout,													//Pipeline layout
+					DESCRIPTOR_SET_COMPOSITOR,										//First index
+					descriptorSet,													//Descriptor sets
+					{}																//Dynamic offsets
+				);
+
+				//Set the dynamic viewport and scissor
+				commandBuffer->setViewport(0, viewports);
+				commandBuffer->setScissor(0, scissors);		
+
+				//Draw all the layers
+				for(const LayerBase& layer : cache.layers) {
+					layer.draw(*commandBuffer);
+				}
 			}
 
+			//Finish the command buffer
 			result->endRenderPass(commandBuffer->getCommandBuffer());
 			commandBuffer->end();
-
-			//Add dependencies to the command buffer
-			commandBuffer->setDependencies(cache.dependencies);
 
 			//Draw to the frame
 			result->draw(std::move(commandBuffer));
 
-			//Clear the state. This should not deallocate them
-			layers.clear(); 
-			cache.drawCommandBuffers.clear();
-			cache.dependencies.clear();
+			//Clear cache. This should not deallocate vectors
+			cache.layers.clear(); 
 
 			lastFrame = result;
 			return result;
 		}
 
 	private:
-		bool layerComp(const LayerData& a, const LayerData& b) const {
+		bool layerComp(const LayerBase& a, const LayerBase& b) const {
 			/*
 			 * The strategy will be the following:
 			 * 1. Draw the alphaless objects backwards, writing and testing depth
 			 * 2. Draw the transparent objscts forwards, writing and testing depth
 			 */
 			
-			if(a.getHasAlpha() != b.getHasAlpha()) {
+			/*if(a.getHasAlpha() != b.getHasAlpha()) {
 				//Prioritize alphaless drawing
 				return a.getHasAlpha() < b.getHasAlpha();
 			} else {
@@ -266,11 +247,12 @@ struct CompositorImpl {
 				return !hasAlpha
 					? aDepth < bDepth
 					: aDepth > bDepth;
-			}
+			}*/ //TODO
+
+			return true;
 		}
 
 		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
-			waitRenderCompletion();
 			uniformBuffer.waitCompletion(vulkan);
 
 			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(uniformBuffer.data())));
@@ -281,7 +263,6 @@ struct CompositorImpl {
 		}
 
 		void updateColorTransferUniform() {
-			waitRenderCompletion();
 			uniformBuffer.waitCompletion(vulkan);
 			
 			std::memcpy(
@@ -334,12 +315,6 @@ struct CompositorImpl {
 			};
 
 			vulkan.updateDescriptorSets(writeDescriptorSets, {});
-		}
-
-		void waitRenderCompletion() {
-			if(lastFrame) {
-				lastFrame->waitDependencies();
-			}
 		}
 
 		static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
@@ -451,12 +426,10 @@ struct CompositorImpl {
 		}
 	};
 
-	using LayerInput = Signal::Input<LayerDataStream>;
 	using Output = Signal::Output<Video>;
 
 	std::reference_wrapper<Compositor> 			owner;
 
-	std::vector<LayerInput>						layerIns;
 	Output										videoOut;
 
 	std::unique_ptr<Open>						opened;
@@ -464,7 +437,6 @@ struct CompositorImpl {
 
 	CompositorImpl(	Compositor& comp )
 		: owner(comp)
-		, layerIns()
 		, videoOut(std::string(Signal::makeOutputName<Video>()), createPullCallback(this))
 	{
 	}
@@ -505,29 +477,18 @@ struct CompositorImpl {
 		auto& compositor = owner.get();
 
 		if(opened) {
-			const bool inputsHaveChanged = std::any_of(
+			const auto layers = compositor.getLayers();
+
+			/*const bool layersHaveChanged = std::any_of(
 				layerIns.cbegin(), layerIns.cend(),
 				[] (const LayerInput& input) -> bool {
 					return input.hasChanged();
 				}
-			);
+			);*/ 
+			const bool layersHaveChanged = true; //TODO
 
-			if(hasChanged || inputsHaveChanged) {
-				if(compositor.getVideoMode()) {
-					//Query all the layers
-					for(auto& layerIn : layerIns) {
-						const auto& layerData = layerIn.pull();
-
-						//Draw only if valid
-						if(layerData){
-							opened->addLayer(*layerData);
-						} 
-					}
-
-					videoOut.push(opened->draw());
-				} else {
-					videoOut.reset();
-				}
+			if(hasChanged || layersHaveChanged) {
+				videoOut.push(opened->draw(layers));
 
 				//Update the state
 				hasChanged = false;
@@ -646,35 +607,6 @@ struct CompositorImpl {
 		return result;
 	}
 
-	void setLayerCount(size_t count) {
-		auto& compositor = owner.get();
-
-		//Unregister all pads as they might be reallocated
-		for(auto& pad : layerIns) {
-			compositor.removePad(pad);
-		}
-
-		//Resize the layer vector
-		const auto oldSize = getLayerCount();
-		layerIns.resize(count, LayerInput(""));
-
-		//Rename the newly created layers according to their index
-		for(size_t i = oldSize; i < layerIns.size(); ++i) {
-			layerIns[i].setName(Signal::makeInputName<LayerDataStream>(i));
-		}
-
-		//Register all pads again
-		for(auto& pad : layerIns) {
-			compositor.registerPad(pad);
-		}
-
-		hasChanged = true;
-	}
-
-	size_t getLayerCount() const {
-		return layerIns.size();
-	}
-
 private:
 	static Output::PullCallback createPullCallback(CompositorImpl* impl) {
 		return [impl] (Output&) {
@@ -722,14 +654,5 @@ Compositor::Compositor(Compositor&& other) = default;
 Compositor::~Compositor() = default;
 
 Compositor& Compositor::operator=(Compositor&& other) = default;
-
-
-void Compositor::setLayerCount(size_t count) {
-	(*this)->setLayerCount(count);
-}
-
-size_t Compositor::getLayerCount() const {
-	return (*this)->getLayerCount();
-}
 
 }
