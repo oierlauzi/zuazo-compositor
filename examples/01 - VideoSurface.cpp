@@ -86,6 +86,7 @@ int main(int argc, const char* argv[]) {
 		Zuazo::Math::Vec2f(768, 768)
 	);
 
+	surface.setScalingMode(Zuazo::ScalingMode::BOXED);
 	surface.open();
 
 	//Route the signals

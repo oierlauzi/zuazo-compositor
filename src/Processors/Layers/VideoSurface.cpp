@@ -9,6 +9,7 @@
 
 #include <utility>
 #include <memory>
+#include <unordered_map>
 
 namespace Zuazo::Processors::Layers {
 
@@ -543,6 +544,7 @@ struct VideoSurfaceImpl {
 	};
 
 	using Input = Signal::Input<Video>;
+	using LastFrames = std::unordered_map<const RendererBase*, Video>;
 
 	std::reference_wrapper<VideoSurface>	owner;
 
@@ -551,7 +553,8 @@ struct VideoSurfaceImpl {
 	Math::Vec2f								size;
 
 	std::unique_ptr<Open>					opened;
-	bool									hasChanged;
+	LastFrames								lastFrames;
+	
 
 	VideoSurfaceImpl(VideoSurface& owner, Math::Vec2f size)
 		: owner(owner)
@@ -585,7 +588,7 @@ struct VideoSurfaceImpl {
 			);
 		}
 
-		hasChanged = true; //Signal rendering if needed
+		assert(lastFrames.empty()); //Any hasChanged() should return true
 	}
 
 	void close(ZuazoBase& base) {
@@ -594,17 +597,38 @@ struct VideoSurfaceImpl {
 		
 		videoIn.reset();
 		opened.reset();
+		lastFrames.clear();
 	}
 
-	void drawCallback(const LayerBase& base, Graphics::CommandBuffer& cmd) {
+	bool hasChangedCallback(const LayerBase& base, const RendererBase& renderer) const {
+		const auto& videoSurface = static_cast<const VideoSurface&>(base);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
+
+		const auto ite = lastFrames.find(&renderer);
+		if(ite == lastFrames.cend()) {
+			//There is no frame previously rendered for this renderer
+			return true;
+		}
+
+		if(ite->second != videoIn.getLastElement()) {
+			//A new frame has arrived since the last rendered one at this renderer
+			return true;
+		}
+
+		if(videoIn.hasChanged()) {
+			//A new frame is available
+			return true;
+		}
+
+		//Nothing has changed :-)
+		return false;
+	}
+
+	void drawCallback(const LayerBase& base, const RendererBase& renderer, Graphics::CommandBuffer& cmd) {
 		const auto& videoSurface = static_cast<const VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		if(opened) {
-			//if(hasChanged || videoIn.hasChanged()) { //TODO has changed in another way
-				
-			//}
-
 			const auto& frame = videoIn.pull();
 			
 			//Draw
@@ -612,8 +636,8 @@ struct VideoSurfaceImpl {
 				opened->draw(cmd, frame);
 			}
 
-			//Update the state
-			hasChanged = false;
+			//Update the state for next hasChanged()
+			lastFrames[&renderer] = frame;
 		}
 	}
 
@@ -625,7 +649,7 @@ struct VideoSurfaceImpl {
 			opened->updateModelMatrixUniform(transform);
 		}
 
-		hasChanged = true;
+		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 	void opacityCallback(LayerBase& base, float opa) {
@@ -636,7 +660,7 @@ struct VideoSurfaceImpl {
 			opened->updateOpacityUniform(opa);
 		}
 
-		hasChanged = true;
+		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
@@ -657,7 +681,7 @@ struct VideoSurfaceImpl {
 			opened->geometry.setScalingMode(mode);
 		}
 
-		hasChanged = true;
+		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 	void scalingFilterCallback(VideoScalerBase& base, ScalingFilter filter) {
@@ -674,7 +698,7 @@ struct VideoSurfaceImpl {
 				opened->geometry.setTargetSize(s);
 			}
 
-			hasChanged = true;
+			lastFrames.clear(); //Will force hasChanged() to true
 		}
 	}
 
@@ -720,7 +744,7 @@ private:
 				);
 			}
 
-			hasChanged = true; //Signal rendering if needed
+			lastFrames.clear(); //Will force hasChanged() to true
 		}
 	}
 
@@ -746,7 +770,8 @@ VideoSurface::VideoSurface(	Instance& instance,
 		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
 		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, VideoScalerBase(
 		std::bind(&VideoSurfaceImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),

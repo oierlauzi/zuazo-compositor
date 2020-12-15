@@ -142,7 +142,9 @@ struct CompositorImpl {
 			updateProjectionMatrixUniform(cam);
 		}
 
-		Video draw(Utils::BufferView<const Compositor::LayerRef> layers) {
+		Video draw(	const RendererBase& renderer, 
+					Utils::BufferView<const Compositor::LayerRef> layers )
+		{
 			//Cache should have been cleared
 			assert(cache.layers.empty());
 
@@ -220,7 +222,7 @@ struct CompositorImpl {
 
 				//Draw all the layers
 				for(const LayerBase& layer : cache.layers) {
-					layer.draw(*commandBuffer);
+					layer.draw(renderer, *commandBuffer);
 				}
 			}
 
@@ -493,16 +495,15 @@ struct CompositorImpl {
 		if(opened) {
 			const auto layers = compositor.getLayers();
 
-			/*const bool layersHaveChanged = std::any_of(
-				layerIns.cbegin(), layerIns.cend(),
-				[] (const LayerInput& input) -> bool {
-					return input.hasChanged();
+			const bool layersHaveChanged = std::any_of(
+				layers.cbegin(), layers.cend(),
+				[&compositor] (const LayerBase& layer) -> bool {
+					return layer.hasChanged(compositor);
 				}
-			);*/ 
-			const bool layersHaveChanged = true; //TODO
+			);
 
 			if(hasChanged || layersHaveChanged) {
-				videoOut.push(opened->draw(layers));
+				videoOut.push(opened->draw(compositor, layers));
 
 				//Update the state
 				hasChanged = false;

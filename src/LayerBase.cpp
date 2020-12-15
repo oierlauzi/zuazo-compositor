@@ -18,6 +18,7 @@ struct LayerBase::Impl {
 	TransformCallback								transformCallback;
 	OpacityCallback									opacityCallback;
 	BlendingModeCallback							blendingModeCallback;
+	HasChangedCallback								hasChangedCallback;
 	DrawCallback									drawCallback;
 	RenderPassCallback								renderPassCallback;
 
@@ -26,6 +27,7 @@ struct LayerBase::Impl {
 			TransformCallback transformCbk,
 			OpacityCallback opacityCbk,
 			BlendingModeCallback blendingModeCbk,
+			HasChangedCallback hasChangedCbk,
 			DrawCallback drawCbk,
 			RenderPassCallback renderPassCbk )
 		: renderer(renderer)
@@ -36,6 +38,7 @@ struct LayerBase::Impl {
 		, transformCallback(std::move(transformCbk))
 		, opacityCallback(std::move(opacityCbk))
 		, blendingModeCallback(std::move(blendingModeCbk))
+		, hasChangedCallback(std::move(hasChangedCbk))
 		, drawCallback(std::move(drawCbk))
 		, renderPassCallback(std::move(renderPassCbk))
 	{
@@ -95,8 +98,12 @@ struct LayerBase::Impl {
 	}
 
 
-	void draw(const LayerBase& base, Graphics::CommandBuffer& cmd) const {
-		Utils::invokeIf(drawCallback, base, cmd);
+	bool hasChanged(const LayerBase& base, const RendererBase& renderer) const {
+		return hasChangedCallback ? hasChangedCallback(base, renderer) : true;
+	}
+
+	void draw(const LayerBase& base, const RendererBase& renderer, Graphics::CommandBuffer& cmd) const {
+		Utils::invokeIf(drawCallback, base, renderer, cmd);
 	}
 
 
@@ -131,6 +138,15 @@ struct LayerBase::Impl {
 		return blendingModeCallback;
 	}
 
+
+	void setHasChangedCallback(HasChangedCallback cbk) {
+		hasChangedCallback = std::move(cbk);
+	}
+
+	const HasChangedCallback& getHasChangedCallback() const {
+		return hasChangedCallback;
+	}
+
 	void setDrawCallback(DrawCallback cbk) {
 		drawCallback = std::move(cbk);
 	}
@@ -154,11 +170,13 @@ LayerBase::LayerBase(	const RendererBase* renderer,
 						TransformCallback transformCbk,
 						OpacityCallback opacityCbk,
 						BlendingModeCallback blendingModeCbk,
+						HasChangedCallback hasChangedCbk,
 						DrawCallback drawCbk,
 						RenderPassCallback renderPassCbk )
 	: m_impl(	{}, renderer, std::move(transformCbk), 
 				std::move(opacityCbk), std::move(blendingModeCbk), 
-				std::move(drawCbk), std::move(renderPassCbk) )
+				std::move(hasChangedCbk), std::move(drawCbk), 
+				std::move(renderPassCbk) )
 {
 }
 
@@ -205,8 +223,12 @@ BlendingMode LayerBase::getBlendingMode() const {
 }
 
 
-void LayerBase::draw(Graphics::CommandBuffer& cmd) const {
-	m_impl->draw(*this, cmd);
+bool LayerBase::hasChanged(const RendererBase& renderer) const {
+	return m_impl->hasChanged(*this, renderer);
+}
+
+void LayerBase::draw(const RendererBase& renderer, Graphics::CommandBuffer& cmd) const {
+	m_impl->draw(*this, renderer, cmd);
 }
 
 
@@ -239,6 +261,15 @@ void LayerBase::setBlendingModeCallback(BlendingModeCallback cbk) {
 
 const LayerBase::BlendingModeCallback& LayerBase::getBlendingModeCallback() const {
 	return m_impl->getBlendingModeCallback();
+}
+
+
+void LayerBase::setHasChangedCallback(HasChangedCallback cbk) {
+	m_impl->setHasChangedCallback(std::move(cbk));
+}
+
+const LayerBase::HasChangedCallback& LayerBase::getHasChangedCallback() const {
+	return m_impl->getHasChangedCallback();
 }
 
 

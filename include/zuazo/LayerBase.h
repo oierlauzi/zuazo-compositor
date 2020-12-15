@@ -17,13 +17,15 @@ public:
 	using TransformCallback = std::function<void(LayerBase&, const Math::Transformf&)>;
 	using OpacityCallback = std::function<void(LayerBase&, float)>;
 	using BlendingModeCallback = std::function<void(LayerBase&, BlendingMode)>;
-	using DrawCallback = std::function<void(const LayerBase&, Graphics::CommandBuffer&)>;
+	using HasChangedCallback = std::function<bool(const LayerBase&, const RendererBase&)>;
+	using DrawCallback = std::function<void(const LayerBase&, const RendererBase&, Graphics::CommandBuffer&)>;
 	using RenderPassCallback = std::function<void(LayerBase&, vk::RenderPass)>;
 
 	LayerBase(	const RendererBase* renderer,
 				TransformCallback transformCbk = {},
 				OpacityCallback opacityCbk = {},
 				BlendingModeCallback blendingModeCbk = {},
+				HasChangedCallback hasChangedCbk = {},
 				DrawCallback drawCbk = {},
 				RenderPassCallback renderPassCbk = {} );
 	LayerBase(const LayerBase& other) = delete;
@@ -45,7 +47,8 @@ public:
 	void								setBlendingMode(BlendingMode mode);
 	BlendingMode						getBlendingMode() const;
 
-	void								draw(Graphics::CommandBuffer& cmd) const;
+	bool								hasChanged(const RendererBase& renderer) const;
+	void								draw(const RendererBase& renderer, Graphics::CommandBuffer& cmd) const;
 
 	vk::RenderPass						getRenderPass() const;
 
@@ -58,6 +61,9 @@ protected:
 
 	void								setBlendingModeCallback(BlendingModeCallback cbk);
 	const BlendingModeCallback&			getBlendingModeCallback() const;
+
+	void								setHasChangedCallback(HasChangedCallback cbk);
+	const HasChangedCallback&			getHasChangedCallback() const;
 
 	void								setDrawCallback(DrawCallback cbk);
 	const DrawCallback&					getDrawCallback() const;
