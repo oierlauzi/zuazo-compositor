@@ -15,6 +15,7 @@ layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
 };
 
 layout(set = 1, binding = 1) uniform LayerDataBlock{
+	int sampleMode;
 	float opacity;
 };
 
@@ -27,7 +28,7 @@ void main() {
 	//Sample the color from the frame
 	vec4 color = ct_getColor(
 		inColorTransfer, outColorTransfer, 
-		samplers, ex_texCoord
+		samplers, sampleMode, ex_texCoord
 	);
 
 	//Apply the opacity to it
