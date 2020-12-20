@@ -14,7 +14,7 @@ layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
 	ct_write_data outColorTransfer;
 };
 
-layout(set = 1, binding = 1) uniform LayerDataBlock{
+layout(set = 1, binding = 1) uniform LayerDataBlock {
 	int sampleMode;
 	float opacity;
 };

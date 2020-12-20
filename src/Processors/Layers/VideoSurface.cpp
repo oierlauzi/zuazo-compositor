@@ -50,8 +50,8 @@ struct VideoSurfaceImpl {
 		};
 
 		static constexpr std::array<Utils::Area, LAYERDATA_UNIFORM_COUNT> LAYERDATA_UNIFORM_LAYOUT = {
-			Utils::Area(0, 					sizeof(int32_t)),
-			Utils::Area(sizeof(int32_t), 	sizeof(float))
+			Utils::Area(0, 					sizeof(int32_t)	), 	//LAYERDATA_UNIFORM_SAMPLEMODE
+			Utils::Area(sizeof(int32_t), 	sizeof(float)  	)	//LAYERDATA_UNIFORM_OPACITY
 		};
 
 
@@ -223,7 +223,7 @@ struct VideoSurfaceImpl {
 			
 			const auto updateArea = Utils::Area(
 				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].begin() + uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].begin(),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].end()
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].size()
 			);
 
 			uniformFlushArea |= updateArea;
@@ -238,7 +238,7 @@ struct VideoSurfaceImpl {
 
 			const auto updateArea = Utils::Area(
 				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].begin() + uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].begin(),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].end()
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].size()
 			);
 			
 			uniformFlushArea |= updateArea;
@@ -339,17 +339,17 @@ struct VideoSurfaceImpl {
 			constexpr size_t modelMatrixOff = 0;
 			constexpr size_t modelMatrixSize = sizeof(glm::mat4);
 			
-			const size_t opacityOff = Utils::align(
+			const size_t layerDataOff = Utils::align(
 				modelMatrixOff + modelMatrixSize, 
 				limits.minUniformBufferOffsetAlignment
 			);
-			constexpr size_t opacitySize = LAYERDATA_UNIFORM_LAYOUT.back().end();
+			constexpr size_t layerDataSize = LAYERDATA_UNIFORM_LAYOUT.back().end();
 
 			return UniformBufferLayout {
 				Utils::Area(modelMatrixOff,	modelMatrixSize),	//Projection matrix
-				Utils::Area(opacityOff,		opacitySize )		//Color Transfer
+				Utils::Area(layerDataOff,	layerDataSize )		//Color Transfer
 			};
-		}
+		};
 
 		static Graphics::StagedBuffer createUniformBuffer(const Graphics::Vulkan& vulkan, const UniformBufferLayout& layout) {
 			return Graphics::StagedBuffer(
@@ -574,15 +574,17 @@ struct VideoSurfaceImpl {
 		static int32_t& getSampleMode(	const UniformBufferLayout& uniformBufferLayout, 
 										Graphics::StagedBuffer& uniformBuffer ) 
 		{
-			const auto& area = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
-			return *(reinterpret_cast<int32_t*>(area.begin(uniformBuffer.data())));
+			const auto& area1 = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
+			const auto& area2 = LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE];
+			return *(reinterpret_cast<int32_t*>(area1.begin(area2.begin(uniformBuffer.data()))));
 		}
 
 		static float& getOpacity(	const UniformBufferLayout& uniformBufferLayout, 
 									Graphics::StagedBuffer& uniformBuffer ) 
 		{
-			const auto& area = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
-			return *(reinterpret_cast<float*>(area.begin(uniformBuffer.data())) + sizeof(int32_t));
+			const auto& area1 = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
+			const auto& area2 = LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY];
+			return *(reinterpret_cast<float*>(area1.begin(area2.begin(uniformBuffer.data()))));
 		}
 
 	};
