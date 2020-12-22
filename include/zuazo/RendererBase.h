@@ -2,6 +2,7 @@
 
 #include <zuazo/DepthStencilFormat.h>
 #include <zuazo/Graphics/Vulkan.h>
+#include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Math/Transform.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Utils/Limit.h>
@@ -24,7 +25,7 @@ public:
 
 	enum DescriptorBindings {
 		DESCRIPTOR_BINDING_PROJECTION_MATRIX,
-		DESCRIPTOR_BINDING_COLOR_TRANSFER,
+		DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,
 
 		DESCRIPTOR_COUNT
 	};
@@ -57,6 +58,9 @@ public:
 
 	void									setLayers(Utils::BufferView<const LayerRef> layers);
 	Utils::BufferView<const LayerRef>		getLayers() const;
+
+	bool									layersHaveChanged() const;
+	void									draw(Graphics::CommandBuffer& cmd) const;
 
 	vk::RenderPass							getRenderPass() const;
 

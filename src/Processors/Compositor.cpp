@@ -62,14 +62,14 @@ struct CompositorImpl {
 		vk::PipelineLayout							pipelineLayout;
 
 		Graphics::Drawtable 						drawtable;
-		Graphics::OutputColorTransfer				colorTransfer;
 		Graphics::CommandBufferPool					commandBufferPool;
 		
 		std::vector<vk::ClearValue>					clearValues;
 
+		Math::Mat4x4f&								uniformProjectionMatrix;
+		Utils::BufferView<std::byte>				uniformOutputColorTransfer;
 		Utils::Area									uniformFlushArea;
 		vk::PipelineStageFlags						uniformFlushStages;
-		Cache										cache;
 
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& frameDesc,
@@ -83,10 +83,12 @@ struct CompositorImpl {
 			, pipelineLayout(createPipelineLayout(vulkan))
 
 			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
-			, colorTransfer(drawtable.getOutputColorTransfer())
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
 			, clearValues(Graphics::Drawtable::getClearValues(frameDesc, depthStencilFmt))
+
+			, uniformProjectionMatrix(getProjectionMatrix(uniformBufferLayout, resources->uniformBuffer))
+			, uniformOutputColorTransfer(getOutputColorTransfer(uniformBufferLayout, resources->uniformBuffer))
 		{
 			//Bind the uniform buffers to the descriptor sets
 			writeDescriptorSets();
@@ -142,15 +144,7 @@ struct CompositorImpl {
 			updateProjectionMatrixUniform(cam);
 		}
 
-		Video draw(	const RendererBase& renderer, 
-					Utils::BufferView<const Compositor::LayerRef> layers )
-		{
-			//Cache should have been cleared
-			assert(cache.layers.empty());
-
-			//Populate layers
-			cache.layers.insert(cache.layers.cend(), layers.cbegin(), layers.cend());
-
+		Video draw(const RendererBase& renderer) {
 			//Obtain the viewports and the scissors
 			const auto extent = Graphics::toVulkan(drawtable.getFrameDescriptor().getResolution());
 			const std::array viewports = {
@@ -174,12 +168,6 @@ struct CompositorImpl {
 			//Add the compositor related dependencies to it
 			commandBuffer->addDependencies({resources});
 
-			//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
-			std::stable_sort(
-				cache.layers.begin(), cache.layers.end(),
-				std::bind(&Open::layerComp, std::cref(*this), std::placeholders::_1, std::placeholders::_2)
-			);
-
 			//Begin the commandbuffer
 			constexpr vk::CommandBufferBeginInfo cmdBeginInfo(
 				vk::CommandBufferUsageFlagBits::eOneTimeSubmit
@@ -195,7 +183,7 @@ struct CompositorImpl {
 			);	
 
 			//Execute all the command buffers gathered from the layers
-			if(!cache.layers.empty()) {
+			if(!renderer.getLayers().empty()) {
 				//Flush the uniform buffer, as it will be used
 				resources->uniformBuffer.flushData(
 					vulkan,
@@ -218,12 +206,10 @@ struct CompositorImpl {
 
 				//Set the dynamic viewport and scissor
 				commandBuffer->setViewport(0, viewports);
-				commandBuffer->setScissor(0, scissors);		
+				commandBuffer->setScissor(0, scissors);
 
-				//Draw all the layers
-				for(const LayerBase& layer : cache.layers) {
-					layer.draw(renderer, *commandBuffer);
-				}
+				//Record all layers
+				renderer.draw(*commandBuffer);
 			}
 
 			//Finish the command buffer
@@ -233,46 +219,15 @@ struct CompositorImpl {
 			//Draw to the frame
 			result->draw(std::move(commandBuffer));
 
-			//Clear cache. This should not deallocate vectors
-			cache.layers.clear(); 
-
 			return result;
 		}
 
 	private:
-		bool layerComp(const LayerBase& a, const LayerBase& b) const {
-			/*
-			 * The strategy will be the following:
-			 * 1. Draw the alphaless objects backwards, writing and testing depth
-			 * 2. Draw the transparent objscts forwards, writing and testing depth
-			 */
-			
-			/*if(a.getHasAlpha() != b.getHasAlpha()) {
-				//Prioritize alphaless drawing
-				return a.getHasAlpha() < b.getHasAlpha();
-			} else {
-				//Both or neither have alpha. Depth must be taken in consideration
-				assert(a.getHasAlpha() == b.getHasAlpha());
-				const auto hasAlpha = a.getHasAlpha();
-
-				//Calculate the average depth
-				const auto& projMatrix = *(reinterpret_cast<const Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(uniformBuffer.data())));
-				const auto aDepth = (projMatrix * a.getAveragePosition()).z;
-				const auto bDepth = (projMatrix * b.getAveragePosition()).z;
-
-				return !hasAlpha
-					? aDepth < bDepth
-					: aDepth > bDepth;
-			}*/ //TODO
-
-			return true;
-		}
-
 		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
 			resources->uniformBuffer.waitCompletion(vulkan);
 
-			auto& mtx = *(reinterpret_cast<Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(resources->uniformBuffer.data())));
-			mtx = cam.calculateMatrix(drawtable.getFrameDescriptor().calculateSize());
+			const auto size = drawtable.getFrameDescriptor().calculateSize();
+			uniformProjectionMatrix = cam.calculateMatrix(size);
 			
 			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
 			uniformFlushStages |= vk::PipelineStageFlagBits::eVertexShader;
@@ -281,13 +236,15 @@ struct CompositorImpl {
 		void updateColorTransferUniform() {
 			resources->uniformBuffer.waitCompletion(vulkan);
 			
+			const auto outputColorTransfer = drawtable.getOutputColorTransfer();
+			assert(outputColorTransfer.size() == uniformOutputColorTransfer.size());
 			std::memcpy(
-				uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].begin(resources->uniformBuffer.data()),
-				colorTransfer.data(),
-				uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].size()
+				uniformOutputColorTransfer.data(),
+				outputColorTransfer.data(),
+				uniformOutputColorTransfer.size()
 			);
 
-			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER];
+			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER];
 			uniformFlushStages |= vk::PipelineStageFlagBits::eFragmentShader;
 		}
 
@@ -302,8 +259,8 @@ struct CompositorImpl {
 			const std::array colorTransferBuffers = {
 				vk::DescriptorBufferInfo(
 					resources->uniformBuffer.getBuffer(),											//Buffer
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].offset(),	//Offset
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER].size()		//Size
+					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER].offset(),	//Offset
+					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER].size()		//Size
 				)
 			};
 
@@ -320,7 +277,7 @@ struct CompositorImpl {
 				),
 				vk::WriteDescriptorSet( //ColorTransfer UBO
 					descriptorSet,											//Descriptor set
-					RendererBase::DESCRIPTOR_BINDING_COLOR_TRANSFER,		//Binding
+					RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,		//Binding
 					0, 														//Index
 					colorTransferBuffers.size(),							//Descriptor count		
 					vk::DescriptorType::eUniformBuffer,						//Descriptor type
@@ -440,6 +397,20 @@ struct CompositorImpl {
 				vk::CommandBufferLevel::ePrimary
 			);
 		}
+
+		static Math::Mat4x4f& getProjectionMatrix(	const UniformBufferLayout& uniformBufferLayout,
+													Graphics::StagedBuffer& uniformBuffer )
+		{
+			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
+			return *(reinterpret_cast<Math::Mat4x4f*>(area.begin(uniformBuffer.data())));
+		}
+
+		static Utils::BufferView<std::byte> getOutputColorTransfer(	const UniformBufferLayout& uniformBufferLayout,
+																	Graphics::StagedBuffer& uniformBuffer )
+		{
+			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER];
+			return Utils::BufferView<std::byte>(area.begin(uniformBuffer.data()), area.size());
+		}
 	};
 
 	using Output = Signal::Output<Video>;
@@ -493,17 +464,8 @@ struct CompositorImpl {
 		auto& compositor = owner.get();
 
 		if(opened) {
-			const auto layers = compositor.getLayers();
-
-			const bool layersHaveChanged = std::any_of(
-				layers.cbegin(), layers.cend(),
-				[&compositor] (const LayerBase& layer) -> bool {
-					return layer.hasChanged(compositor);
-				}
-			);
-
-			if(hasChanged || layersHaveChanged) {
-				videoOut.push(opened->draw(compositor, layers));
+			if(hasChanged || compositor.layersHaveChanged()) {
+				videoOut.push(opened->draw(compositor));
 
 				//Update the state
 				hasChanged = false;

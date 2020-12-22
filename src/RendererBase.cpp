@@ -1,6 +1,9 @@
 #include <zuazo/RendererBase.h>
 
 #include <zuazo/Utils/StaticId.h>
+#include <zuazo/LayerBase.h>
+
+#include <algorithm>
 
 namespace Zuazo {
 
@@ -22,6 +25,8 @@ struct RendererBase::Impl {
 	std::array<DepthStencilFormatCallback, DSCBK_COUNT>	depthStencilFmtCbk;
 	CameraCallback										cameraCbk;
 	RenderPassQueryCallback								renderPassQueryCbk;
+
+	mutable std::vector<LayerRef>						sortedLayers;
 
 
 	Impl(	Utils::Limit<DepthStencilFormat> depthStencil,
@@ -104,6 +109,37 @@ struct RendererBase::Impl {
 	}
 
 
+	bool layersHaveChanged(const RendererBase& renderer) const {
+		return std::any_of(
+			layers.cbegin(), layers.cend(),
+			[&renderer] (const LayerBase& layer) -> bool {
+				return layer.hasChanged(renderer);
+			}
+		);
+	}
+
+	void draw(const RendererBase& renderer, Graphics::CommandBuffer& cmd) const {
+		assert(sortedLayers.empty());
+
+		//Insert all the layers
+		sortedLayers.insert(sortedLayers.cend(), layers.cbegin(), layers.cend());
+
+		//Sort the layers based on their alpha and depth. Stable sort is used to preserve order
+		std::stable_sort(
+			sortedLayers.begin(), sortedLayers.end(),
+			std::bind(&Impl::layerComp, std::cref(*this), std::placeholders::_1, std::placeholders::_2)
+		);
+
+		//Draw all the layers
+		for(const LayerBase& layer : sortedLayers) {
+			layer.draw(renderer, cmd);
+		}
+
+		//Empty the sorted layers array. This should not deallocate it
+		sortedLayers.clear();
+	}
+
+
 	vk::RenderPass getRenderPass(const RendererBase& base) const {
 		vk::RenderPass result = {};
 
@@ -134,7 +170,7 @@ struct RendererBase::Impl {
 					nullptr											//Immutable samplers
 				), 
 				vk::DescriptorSetLayoutBinding(	//UBO binding
-					DESCRIPTOR_BINDING_COLOR_TRANSFER,				//Binding
+					DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,		//Binding
 					vk::DescriptorType::eUniformBuffer,				//Type
 					1,												//Count
 					vk::ShaderStageFlagBits::eFragment,				//Shader stage
@@ -205,6 +241,34 @@ private:
 		}
 	}
 
+	bool layerComp(const LayerBase& a, const LayerBase& b) const {
+		/*
+			* The strategy will be the following:
+			* 1. Draw the alphaless objects backwards, writing and testing depth
+			* 2. Draw the transparent objscts forwards, writing and testing depth
+			*/
+		
+		/*if(a.getHasAlpha() != b.getHasAlpha()) {
+			//Prioritize alphaless drawing
+			return a.getHasAlpha() < b.getHasAlpha();
+		} else {
+			//Both or neither have alpha. Depth must be taken in consideration
+			assert(a.getHasAlpha() == b.getHasAlpha());
+			const auto hasAlpha = a.getHasAlpha();
+
+			//Calculate the average depth
+			const auto& projMatrix = *(reinterpret_cast<const Math::Mat4x4f*>(uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].begin(uniformBuffer.data())));
+			const auto aDepth = (projMatrix * a.getAveragePosition()).z;
+			const auto bDepth = (projMatrix * b.getAveragePosition()).z;
+
+			return !hasAlpha
+				? aDepth < bDepth
+				: aDepth > bDepth;
+		}*/ //TODO
+
+		return true;
+	}
+
 };
 
 
@@ -266,6 +330,15 @@ void RendererBase::setCamera(const Camera& cam) {
 
 const RendererBase::Camera& RendererBase::getCamera() const {
 	return m_impl->getCamera();
+}
+
+
+bool RendererBase::layersHaveChanged() const {
+	return m_impl->layersHaveChanged(*this);
+}
+
+void RendererBase::draw(Graphics::CommandBuffer& cmd) const {
+	m_impl->draw(*this, cmd);
 }
 
 
