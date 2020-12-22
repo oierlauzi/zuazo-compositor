@@ -1,5 +1,6 @@
 #include <zuazo/RendererBase.h>
 
+#include <zuazo/Graphics/ColorTransfer.h>
 #include <zuazo/Utils/StaticId.h>
 #include <zuazo/LayerBase.h>
 
@@ -152,7 +153,23 @@ struct RendererBase::Impl {
 
 
 
+	static UniformBufferLayout getUniformBufferLayout(const Graphics::Vulkan& vulkan) {
+		const auto& limits = vulkan.getPhysicalDeviceProperties().limits;
 
+		constexpr size_t projectionMatrixOff = 0;
+		constexpr size_t projectionMatrixSize = sizeof(glm::mat4);
+		
+		const size_t colorTansferOff = Utils::align(
+			projectionMatrixOff + projectionMatrixSize, 
+			limits.minUniformBufferOffsetAlignment
+		);
+		const size_t colorTansferSize = Graphics::OutputColorTransfer::size();
+
+		return UniformBufferLayout {
+			Utils::Area(projectionMatrixOff,	projectionMatrixSize),	//Projection matrix
+			Utils::Area(colorTansferOff,		colorTansferSize )		//Color Transfer
+		};
+	}
 
 	static vk::DescriptorSetLayout getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 		static const Utils::StaticId id;
@@ -189,6 +206,32 @@ struct RendererBase::Impl {
 		assert(result);
 		return result;
 	}
+
+	static vk::PipelineLayout getBasePipelineLayout(const Graphics::Vulkan& vulkan) {
+		//This pipeline layout won't be used to create any pipeline, but it must be compatible with the
+		// 1st descriptor set of all the pipelines, so that the color transfer and projection-view matrices
+		// are bound.
+		static const Utils::StaticId id;
+
+		auto result = vulkan.createPipelineLayout(id);
+
+		if(!result) {
+			const std::array layouts {
+				getDescriptorSetLayout(vulkan)
+			};
+
+			const vk::PipelineLayoutCreateInfo createInfo(
+				{},													//Flags
+				layouts.size(), layouts.data(),						//Descriptor set layouts
+				0, nullptr											//Push constants
+			);
+
+			result = vulkan.createPipelineLayout(id, createInfo);
+		}
+
+		return result;
+	}
+
 
 
 	void setDepthStencilFormatCompatibility(RendererBase& base, Utils::Limit<DepthStencilFormat> comp) {
@@ -355,10 +398,18 @@ vk::RenderPass RendererBase::getRenderPass() const {
 	return m_impl->getRenderPass(*this);
 }
 
+
+RendererBase::UniformBufferLayout RendererBase::getUniformBufferLayout(const Graphics::Vulkan& vulkan) {
+	return Impl::getUniformBufferLayout(vulkan);
+}
+
 vk::DescriptorSetLayout	RendererBase::getDescriptorSetLayout(const Graphics::Vulkan& vulkan) {
 	return Impl::getDescriptorSetLayout(vulkan);
 }
 
+vk::PipelineLayout RendererBase::getPipelineLayout(const Graphics::Vulkan& vulkan) {
+	return Impl::getBasePipelineLayout(vulkan);
+}
 
 
 void RendererBase::setDepthStencilFormatCompatibility(Utils::Limit<DepthStencilFormat> comp) {

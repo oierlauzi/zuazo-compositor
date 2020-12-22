@@ -32,8 +32,6 @@ struct CompositorImpl {
 			DESCRIPTOR_SET_COUNT
 		};
 
-		using UniformBufferLayout = std::array<Utils::Area, RendererBase::DESCRIPTOR_COUNT>;
-
 		using CommandPool = Utils::Pool<Graphics::CommandBuffer>;
 
 		struct Resources {
@@ -56,7 +54,7 @@ struct CompositorImpl {
 
 		const Graphics::Vulkan& 					vulkan;
 
-		UniformBufferLayout							uniformBufferLayout;
+		RendererBase::UniformBufferLayout			uniformBufferLayout;
 		std::shared_ptr<Resources>					resources;
 		vk::DescriptorSet							descriptorSet;
 		vk::PipelineLayout							pipelineLayout;
@@ -76,11 +74,11 @@ struct CompositorImpl {
 				DepthStencilFormat depthStencilFmt,
 				const Compositor::Camera& cam )
 			: vulkan(vulkan)
-			, uniformBufferLayout(createUniformBufferLayout(vulkan))
+			, uniformBufferLayout(RendererBase::getUniformBufferLayout(vulkan))
 			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan, uniformBufferLayout),
 														createDescriptorPool(vulkan) ))
 			, descriptorSet(createDescriptorSet(vulkan, *(resources->descriptorPool)))
-			, pipelineLayout(createPipelineLayout(vulkan))
+			, pipelineLayout(RendererBase::getPipelineLayout(vulkan))
 
 			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
 			, commandBufferPool(createCommandBufferPool(vulkan))
@@ -297,25 +295,9 @@ struct CompositorImpl {
 			return Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
 		}
 
-		static UniformBufferLayout createUniformBufferLayout(const Graphics::Vulkan& vulkan) {
-			const auto& limits = vulkan.getPhysicalDeviceProperties().limits;
-
-			constexpr size_t projectionMatrixOff = 0;
-			constexpr size_t projectionMatrixSize = sizeof(glm::mat4);
-			
-			const size_t colorTansferOff = Utils::align(
-				projectionMatrixOff + projectionMatrixSize, 
-				limits.minUniformBufferOffsetAlignment
-			);
-			const size_t colorTansferSize = Graphics::OutputColorTransfer::size();
-
-			return UniformBufferLayout {
-				Utils::Area(projectionMatrixOff,	projectionMatrixSize),	//Projection matrix
-				Utils::Area(colorTansferOff,		colorTansferSize )		//Color Transfer
-			};
-		}
-
-		static Graphics::StagedBuffer createUniformBuffer(const Graphics::Vulkan& vulkan, const UniformBufferLayout& layout) {
+		static Graphics::StagedBuffer createUniformBuffer(	const Graphics::Vulkan& vulkan, 
+															const RendererBase::UniformBufferLayout& layout ) 
+		{
 			return Graphics::StagedBuffer(
 				vulkan,
 				vk::BufferUsageFlagBits::eUniformBuffer,
@@ -347,33 +329,6 @@ struct CompositorImpl {
 			return vulkan.allocateDescriptorSet(pool, layout).release();
 		}
 
-		static vk::PipelineLayout createPipelineLayout(const Graphics::Vulkan& vulkan) {			
-			//This pipeline layout won't be used to create any pipeline, but it must be compatible with the
-			// 1st descriptor set of all the pipelines, so that the color transfer and projection-view matrices
-			// are bound.
-			static const Utils::StaticId id;
-
-			auto result = vulkan.createPipelineLayout(id);
-
-			if(!result) {
-				const std::array layouts {
-					RendererBase::getDescriptorSetLayout(vulkan)
-				};
-
-				const vk::PipelineLayoutCreateInfo createInfo(
-					{},													//Flags
-					layouts.size(), layouts.data(),						//Descriptor set layouts
-					0, nullptr											//Push constants
-				);
-
-				result = vulkan.createPipelineLayout(id, createInfo);
-			}
-
-			return result;
-		}
-
-
-
 		static Graphics::Drawtable createDrawtable(	const Graphics::Vulkan& vulkan, 
 													const Graphics::Frame::Descriptor& desc,
 													DepthStencilFormat depthStencilFmt )
@@ -398,14 +353,14 @@ struct CompositorImpl {
 			);
 		}
 
-		static Math::Mat4x4f& getProjectionMatrix(	const UniformBufferLayout& uniformBufferLayout,
+		static Math::Mat4x4f& getProjectionMatrix(	const RendererBase::UniformBufferLayout& uniformBufferLayout,
 													Graphics::StagedBuffer& uniformBuffer )
 		{
 			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
 			return *(reinterpret_cast<Math::Mat4x4f*>(area.begin(uniformBuffer.data())));
 		}
 
-		static Utils::BufferView<std::byte> getOutputColorTransfer(	const UniformBufferLayout& uniformBufferLayout,
+		static Utils::BufferView<std::byte> getOutputColorTransfer(	const RendererBase::UniformBufferLayout& uniformBufferLayout,
 																	Graphics::StagedBuffer& uniformBuffer )
 		{
 			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER];

@@ -4,10 +4,12 @@
 #include <zuazo/Graphics/Vulkan.h>
 #include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Math/Transform.h>
+#include <zuazo/Utils/Area.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Utils/Limit.h>
 
 #include <functional>
+#include <array>
 #include <utility>
 
 namespace Zuazo {
@@ -29,6 +31,8 @@ public:
 
 		DESCRIPTOR_COUNT
 	};
+
+	using UniformBufferLayout = std::array<Utils::Area, DESCRIPTOR_COUNT>;
 
 
 	RendererBase(	Utils::Limit<DepthStencilFormat> depthStencil = {},
@@ -64,7 +68,9 @@ public:
 
 	vk::RenderPass							getRenderPass() const;
 
+	static UniformBufferLayout				getUniformBufferLayout(const Graphics::Vulkan& vulkan);
 	static vk::DescriptorSetLayout			getDescriptorSetLayout(const Graphics::Vulkan& vulkan);
+	static vk::PipelineLayout				getPipelineLayout(const Graphics::Vulkan& vulkan);
 
 protected:
 	void									setDepthStencilFormatCompatibility(Utils::Limit<DepthStencilFormat> comp);
