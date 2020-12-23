@@ -1,9 +1,8 @@
 #pragma once
 
-#include "../../LayerBase.h"
-
 #include <zuazo/ZuazoBase.h>
 #include <zuazo/Video.h>
+#include <zuazo/LayerBase.h>
 #include <zuazo/Signal/ConsumerLayout.h>
 #include <zuazo/Utils/Pimpl.h>
 

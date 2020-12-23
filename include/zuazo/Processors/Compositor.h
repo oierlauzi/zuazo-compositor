@@ -1,10 +1,9 @@
 #pragma once
 
-#include "../RendererBase.h"
 
 #include <zuazo/ZuazoBase.h>
-#include <zuazo/ZuazoBase.h>
 #include <zuazo/Video.h>
+#include <zuazo/RendererBase.h>
 #include <zuazo/DepthStencilFormat.h>
 #include <zuazo/Utils/Pimpl.h>
 #include <zuazo/Signal/SourceLayout.h>
