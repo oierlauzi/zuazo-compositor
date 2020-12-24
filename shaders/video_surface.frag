@@ -7,7 +7,10 @@
 //Vertex I/O
 layout(location = 0) in vec2 ex_texCoord;
 
-layout(location = 0) out vec4 out_color;
+layout(location = 0) out vec4 out_color0;
+layout(location = 1) out vec4 out_color1;
+layout(location = 2) out vec4 out_color2;
+layout(location = 3) out vec4 out_color3;
 
 //Uniform buffers
 layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
@@ -38,8 +41,9 @@ void main() {
 		discard;
 	} else {
 		//Output the data
-		out_color = ct_writeColor(
+		ct_setColor(
 			outColorTransfer,
+			out_color0, out_color1, out_color2, out_color3,
 			color
 		);
 	}
