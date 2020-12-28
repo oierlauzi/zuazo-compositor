@@ -83,7 +83,6 @@ struct VideoSurfaceImpl {
 		Graphics::Frame::SamplerDescriptor					samplerDesc;
 		vk::DescriptorSet									descriptorSet;
 
-		vk::RenderPass										renderPass;
 		vk::PipelineLayout									pipelineLayout;
 		std::shared_ptr<vk::UniquePipeline>					pipeline;
 
@@ -97,7 +96,7 @@ struct VideoSurfaceImpl {
 				Math::Vec2f size,
 				ScalingMode scalingMode,
 				ScalingFilter scalingFilter,
-				vk::RenderPass rendPass,
+				Graphics::RenderPass renderPass,
 				BlendingMode blendingMode,
 				const Math::Transformf& transform,
 				float opacity ) 
@@ -109,7 +108,6 @@ struct VideoSurfaceImpl {
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
 			, samplerDesc(Graphics::Frame::getSamplerDescriptor(scalingFilter))
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
-			, renderPass(rendPass)
 			, pipelineLayout(createPipelineLayout(vulkan, samplerDesc.filter))
 			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
 			, uniformModelMatrix(getModelMatrix(uniformBufferLayout, resources->uniformBuffer))
@@ -130,11 +128,10 @@ struct VideoSurfaceImpl {
 		}
 
 		void recreate(	ScalingFilter scalingFilter,
-						vk::RenderPass rendPass,
+						Graphics::RenderPass renderPass,
 						BlendingMode blendingMode ) 
 		{
 			samplerDesc = Graphics::Frame::getSamplerDescriptor(scalingFilter);
-			renderPass = rendPass;
 			pipelineLayout = createPipelineLayout(vulkan, samplerDesc.filter);
 			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
 
@@ -412,7 +409,7 @@ struct VideoSurfaceImpl {
 
 		static vk::UniquePipeline createPipeline(	const Graphics::Vulkan& vulkan,
 													vk::PipelineLayout layout,
-													vk::RenderPass renderPass,
+													Graphics::RenderPass renderPass,
 													BlendingMode blendingMode )
 		{
 			static //So that its ptr can be used as an identifier
@@ -561,7 +558,7 @@ struct VideoSurfaceImpl {
 				&colorBlend,										//Color blending
 				&dynamicState,										//Dynamic states
 				layout,												//Pipeline layout
-				renderPass, 0,										//Renderpasses
+				renderPass.getRenderPass(), 0,						//Renderpasses
 				nullptr, static_cast<uint32_t>(pipelineId)			//Inherit
 			);
 
@@ -624,8 +621,7 @@ struct VideoSurfaceImpl {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface);
 
-		const auto renderPass = videoSurface.getRenderPass();
-		if(renderPass) {
+		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
 			opened = Utils::makeUnique<Open>(
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
@@ -718,7 +714,7 @@ struct VideoSurfaceImpl {
 		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode, videoSurface.getScalingFilter());
 	}
 
-	void renderPassCallback(LayerBase& base, vk::RenderPass renderPass) {
+	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode(), videoSurface.getScalingFilter());
 	}
@@ -758,14 +754,14 @@ struct VideoSurfaceImpl {
 
 private:
 	void recreateCallback(	VideoSurface& videoSurface, 
-							vk::RenderPass renderPass,
+							Graphics::RenderPass renderPass,
 							BlendingMode blendingMode,
 							ScalingFilter scalingFilter )
 	{
 		assert(&owner.get() == &videoSurface);
 
 		if(videoSurface.isOpen()) {
-			const bool isValid = 	renderPass != vk::RenderPass() &&
+			const bool isValid = 	renderPass != Graphics::RenderPass() &&
 									blendingMode > BlendingMode::NONE &&
 									scalingFilter > ScalingFilter::NONE ;
 

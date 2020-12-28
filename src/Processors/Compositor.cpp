@@ -288,7 +288,7 @@ struct CompositorImpl {
 			vulkan.updateDescriptorSets(writeDescriptorSets, {});
 		}
 
-		static vk::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
+		static Graphics::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
 												const Graphics::Frame::Descriptor& frameDesc,
 												DepthStencilFormat depthStencilFmt ) 
 		{
@@ -519,11 +519,11 @@ struct CompositorImpl {
 		}
 	}
 
-	vk::RenderPass renderPassQueryCallback(const RendererBase& base) {
+	Graphics::RenderPass renderPassQueryCallback(const RendererBase& base) {
 		const auto& compositor = static_cast<const Compositor&>(base);
 		assert(&owner.get() == &compositor); 
 
-		vk::RenderPass result = {};
+		Graphics::RenderPass result;
 
 		const auto& videoMode = compositor.getVideoMode();
 		const auto& depthStencilFormat = compositor.getDepthStencilFormat();
