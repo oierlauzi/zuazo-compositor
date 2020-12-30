@@ -6,6 +6,7 @@
 #include <zuazo/Utils/Pool.h>
 #include <zuazo/Graphics/StagedBuffer.h>
 #include <zuazo/Graphics/CommandBufferPool.h>
+#include <zuazo/Graphics/ColorTransfer.h>
 
 #include <utility>
 #include <memory>
@@ -80,7 +81,7 @@ struct VideoSurfaceImpl {
 		UniformBufferLayout									uniformBufferLayout;
 		std::shared_ptr<Resources>							resources;
 		Graphics::Frame::Geometry							geometry;
-		Graphics::Frame::SamplerDescriptor					samplerDesc;
+		Graphics::InputColorTransfer::SamplerDescriptor		samplerDesc;
 		vk::DescriptorSet									descriptorSet;
 
 		vk::PipelineLayout									pipelineLayout;
@@ -106,7 +107,7 @@ struct VideoSurfaceImpl {
 														createUniformBuffer(vulkan, uniformBufferLayout),
 														createDescriptorPool(vulkan) ))
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
-			, samplerDesc(Graphics::Frame::getSamplerDescriptor(scalingFilter))
+			, samplerDesc(Graphics::InputColorTransfer::getSamplerDescriptor(scalingFilter))
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
 			, pipelineLayout(createPipelineLayout(vulkan, samplerDesc.filter))
 			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
@@ -131,7 +132,7 @@ struct VideoSurfaceImpl {
 						Graphics::RenderPass renderPass,
 						BlendingMode blendingMode ) 
 		{
-			samplerDesc = Graphics::Frame::getSamplerDescriptor(scalingFilter);
+			samplerDesc = Graphics::InputColorTransfer::getSamplerDescriptor(scalingFilter);
 			pipelineLayout = createPipelineLayout(vulkan, samplerDesc.filter);
 			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
 
