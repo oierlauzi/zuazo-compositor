@@ -174,7 +174,7 @@ struct CompositorImpl {
 
 			//Draw to the command buffer
 			result->beginRenderPass(
-				commandBuffer->getCommandBuffer(),
+				commandBuffer->get(),
 				scissors.front(),
 				clearValues, 
 				vk::SubpassContents::eInline
@@ -211,7 +211,7 @@ struct CompositorImpl {
 			}
 
 			//Finish the command buffer
-			result->endRenderPass(commandBuffer->getCommandBuffer());
+			result->endRenderPass(commandBuffer->get());
 			commandBuffer->end();
 
 			//Draw to the frame

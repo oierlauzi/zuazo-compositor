@@ -185,7 +185,7 @@ struct VideoSurfaceImpl {
 			);
 
 			frame->bind(
-				cmd.getCommandBuffer(), 										//Commandbuffer
+				cmd.get(), 														//Commandbuffer
 				pipelineLayout, 												//Pipeline layout
 				DESCRIPTOR_SET_FRAME, 											//Descriptor set index
 				samplerDesc.filter												//Filter
@@ -559,7 +559,7 @@ struct VideoSurfaceImpl {
 				&colorBlend,										//Color blending
 				&dynamicState,										//Dynamic states
 				layout,												//Pipeline layout
-				renderPass.getRenderPass(), 0,						//Renderpasses
+				renderPass.get(), 0,								//Renderpasses
 				nullptr, static_cast<uint32_t>(pipelineId)			//Inherit
 			);
 
