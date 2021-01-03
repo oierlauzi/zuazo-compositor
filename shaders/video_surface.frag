@@ -41,10 +41,9 @@ void main() {
 		discard;
 	} else {
 		//Output the data
-		ct_writeColor(
-			outColorTransfer,
-			out_color0, out_color1, out_color2, out_color3,
-			color
+		ct_output(
+			outColorTransfer, color,
+			out_color0, out_color1, out_color2, out_color3			
 		);
 	}
 }
