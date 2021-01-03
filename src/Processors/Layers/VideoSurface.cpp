@@ -81,7 +81,7 @@ struct VideoSurfaceImpl {
 		UniformBufferLayout									uniformBufferLayout;
 		std::shared_ptr<Resources>							resources;
 		Graphics::Frame::Geometry							geometry;
-		Graphics::InputColorTransfer::SamplerDescriptor		samplerDesc;
+		vk::Filter											filter;
 		vk::DescriptorSet									descriptorSet;
 
 		vk::PipelineLayout									pipelineLayout;
@@ -96,7 +96,6 @@ struct VideoSurfaceImpl {
 		Open(	const Graphics::Vulkan& vulkan,
 				Math::Vec2f size,
 				ScalingMode scalingMode,
-				ScalingFilter scalingFilter,
 				Graphics::RenderPass renderPass,
 				BlendingMode blendingMode,
 				const Math::Transformf& transform,
@@ -107,9 +106,9 @@ struct VideoSurfaceImpl {
 														createUniformBuffer(vulkan, uniformBufferLayout),
 														createDescriptorPool(vulkan) ))
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
-			, samplerDesc(Graphics::InputColorTransfer::getSamplerDescriptor(scalingFilter))
+			, filter(vk::Filter::eNearest)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
-			, pipelineLayout(createPipelineLayout(vulkan, samplerDesc.filter))
+			, pipelineLayout(createPipelineLayout(vulkan, filter))
 			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
 			, uniformModelMatrix(getModelMatrix(uniformBufferLayout, resources->uniformBuffer))
 			, uniformSampleMode(getSampleMode(uniformBufferLayout, resources->uniformBuffer))
@@ -119,7 +118,7 @@ struct VideoSurfaceImpl {
 		{
 			writeDescriptorSets();
 			updateModelMatrixUniform(transform);
-			updateSampleModeUniform(samplerDesc.samplingMode);
+			updateSampleModeUniform(0);
 			updateOpacityUniform(opacity);
 		}
 
@@ -128,15 +127,31 @@ struct VideoSurfaceImpl {
 			resources->uniformBuffer.waitCompletion(vulkan);
 		}
 
-		void recreate(	ScalingFilter scalingFilter,
-						Graphics::RenderPass renderPass,
+		void recreate(	Graphics::RenderPass renderPass,
 						BlendingMode blendingMode ) 
 		{
-			samplerDesc = Graphics::InputColorTransfer::getSamplerDescriptor(scalingFilter);
-			pipelineLayout = createPipelineLayout(vulkan, samplerDesc.filter);
+			pipelineLayout = createPipelineLayout(vulkan, filter);
 			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
+		}
 
-			updateSampleModeUniform(samplerDesc.samplingMode);
+		void configureSampler(	ScalingFilter filt, 
+								const Graphics::Frame& frame, 
+								Graphics::RenderPass renderPass, 
+								BlendingMode blendingMode ) 
+		{
+			const auto newDesc = frame.getColorTransfer().getSamplerDescriptor(filt);
+
+			if(filter != newDesc.filter) {
+				//Filter has changed
+				filter = newDesc.filter;
+				recreate(renderPass, blendingMode);
+			}
+
+			if(uniformSampleMode != newDesc.samplingMode) {
+				//Sampling mode has changed
+				updateSampleModeUniform(newDesc.samplingMode);
+			}
+
 		}
 
 		void draw(Graphics::CommandBuffer& cmd, const Video& frame) {
@@ -188,7 +203,7 @@ struct VideoSurfaceImpl {
 				cmd.get(), 														//Commandbuffer
 				pipelineLayout, 												//Pipeline layout
 				DESCRIPTOR_SET_FRAME, 											//Descriptor set index
-				samplerDesc.filter												//Filter
+				filter															//Filter
 			);
 
 			//Draw the frame and finish recording
@@ -285,8 +300,6 @@ struct VideoSurfaceImpl {
 
 			vulkan.updateDescriptorSets(writeDescriptorSets, {});
 		}
-
-
 
 		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan) {
 			return Graphics::StagedBuffer(
@@ -627,7 +640,6 @@ struct VideoSurfaceImpl {
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
 					videoSurface.getScalingMode(),
-					videoSurface.getScalingFilter(),
 					videoSurface.getRenderPass(),
 					videoSurface.getBlendingMode(),
 					videoSurface.getTransform(),
@@ -680,6 +692,13 @@ struct VideoSurfaceImpl {
 			
 			//Draw
 			if(frame) {
+				opened->configureSampler(
+					videoSurface.getScalingFilter(), 
+					*frame, 
+					videoSurface.getRenderPass(),
+					videoSurface.getBlendingMode()
+				);
+
 				opened->draw(cmd, frame);
 			}
 
@@ -712,12 +731,12 @@ struct VideoSurfaceImpl {
 
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode, videoSurface.getScalingFilter());
+		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode);
 	}
 
 	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode(), videoSurface.getScalingFilter());
+		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode());
 	}
 
 	void scalingModeCallback(VideoScalerBase& base, ScalingMode mode) {
@@ -731,9 +750,11 @@ struct VideoSurfaceImpl {
 		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
-	void scalingFilterCallback(VideoScalerBase& base, ScalingFilter filter) {
+	void scalingFilterCallback(VideoScalerBase& base, ScalingFilter) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
-		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getBlendingMode(), filter);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
+
+		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 
@@ -756,20 +777,17 @@ struct VideoSurfaceImpl {
 private:
 	void recreateCallback(	VideoSurface& videoSurface, 
 							Graphics::RenderPass renderPass,
-							BlendingMode blendingMode,
-							ScalingFilter scalingFilter )
+							BlendingMode blendingMode )
 	{
 		assert(&owner.get() == &videoSurface);
 
 		if(videoSurface.isOpen()) {
 			const bool isValid = 	renderPass != Graphics::RenderPass() &&
-									blendingMode > BlendingMode::NONE &&
-									scalingFilter > ScalingFilter::NONE ;
+									blendingMode > BlendingMode::NONE ;
 
 			if(opened && isValid) {
 				//It remains valid
 				opened->recreate(
-					scalingFilter,
 					renderPass,
 					blendingMode
 				);
@@ -783,7 +801,6 @@ private:
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
 					videoSurface.getScalingMode(),
-					scalingFilter,
 					renderPass,
 					blendingMode,
 					videoSurface.getTransform(),

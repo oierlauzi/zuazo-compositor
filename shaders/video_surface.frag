@@ -29,10 +29,10 @@ layout(set = 2, binding = ct_DATA_BINDING) uniform InputColorTransferBlock {
 
 void main() {
 	//Sample the color from the frame
-	vec4 color = ct_getColor(
-		inColorTransfer, outColorTransfer, 
-		samplers, sampleMode, ex_texCoord
-	);
+	vec4 color = ct_texture(sampleMode, inColorTransfer, samplers, ex_texCoord);
+
+	//Perform colorspace conversion
+	color = ct_transferColor(inColorTransfer, outColorTransfer, color);
 
 	//Apply the opacity to it
 	color.a *= opacity;
@@ -41,7 +41,7 @@ void main() {
 		discard;
 	} else {
 		//Output the data
-		ct_setColor(
+		ct_writeColor(
 			outColorTransfer,
 			out_color0, out_color1, out_color2, out_color3,
 			color
