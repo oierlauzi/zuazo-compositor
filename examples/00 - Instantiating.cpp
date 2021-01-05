@@ -187,9 +187,9 @@ int main(int argc, const char** argv) {
 
 			case Zuazo::KeyboardKey::BACKSPACE:
 			case Zuazo::KeyboardKey::DELETE:
-				std::cout << "Removing a layer #" << compositor.getLayers().size()-1 << std::endl;
 				if(layers.size()) {
 					layers.pop_back();
+					std::cout << "Removing a layer #" << compositor.getLayers().size() << std::endl;
 
 					const std::vector<Zuazo::Processors::Compositor::LayerRef> newLayers(
 						layers.cbegin(), layers.cend()

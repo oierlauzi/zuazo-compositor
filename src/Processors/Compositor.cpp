@@ -142,7 +142,7 @@ struct CompositorImpl {
 			updateProjectionMatrixUniform(cam);
 		}
 
-		Video draw(const RendererBase& renderer) {
+		Video draw(RendererBase& renderer) {
 			//Obtain the viewports and the scissors
 			const auto extent = Graphics::toVulkan(drawtable.getFrameDescriptor().getResolution());
 			const std::array viewports = {
