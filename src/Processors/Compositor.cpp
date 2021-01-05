@@ -163,14 +163,14 @@ struct CompositorImpl {
 			auto result = drawtable.acquireFrame();
 			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
 
-			//Add the compositor related dependencies to it
-			commandBuffer->addDependencies({resources});
-
 			//Begin the commandbuffer
 			constexpr vk::CommandBufferBeginInfo cmdBeginInfo(
 				vk::CommandBufferUsageFlagBits::eOneTimeSubmit
 			);
 			commandBuffer->begin(cmdBeginInfo);
+
+			//Add the compositor related dependencies to it
+			commandBuffer->addDependencies({resources});
 
 			//Draw to the command buffer
 			result->beginRenderPass(

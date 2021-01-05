@@ -818,9 +818,9 @@ private:
 
 
 VideoSurface::VideoSurface(	Instance& instance,
-						std::string name,
-						const RendererBase* renderer,
-						Math::Vec2f size )
+							std::string name,
+							const RendererBase* renderer,
+							Math::Vec2f size )
 	: Utils::Pimpl<VideoSurfaceImpl>({}, *this, size)
 	, ZuazoBase(
 		instance, 
