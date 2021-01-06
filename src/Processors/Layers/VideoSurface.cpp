@@ -526,7 +526,7 @@ struct VideoSurfaceImpl {
 			constexpr vk::PipelineDepthStencilStateCreateInfo depthStencil(
 				{},													//Flags
 				true, true, 										//Depth test enable, write
-				vk::CompareOp::eLess, 								//Depth compare op
+				vk::CompareOp::eLessOrEqual,						//Depth compare op
 				false,												//Depth bounds test
 				false, 												//Stencil enabled
 				{}, {},												//Stencil operation state front, back
