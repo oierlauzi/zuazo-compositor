@@ -631,9 +631,9 @@ struct VideoSurfaceImpl {
 	}
 
 	void open(ZuazoBase& base) {
-		assert(!opened);
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface);
+		assert(!opened);
 
 		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
 			opened = Utils::makeUnique<Open>(
@@ -650,13 +650,61 @@ struct VideoSurfaceImpl {
 		assert(lastFrames.empty()); //Any hasChanged() should return true
 	}
 
+	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		auto& videoSurface = static_cast<VideoSurface&>(base);
+		assert(&owner.get() == &videoSurface);
+		assert(!opened);
+		assert(lock.owns_lock());
+
+		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
+			lock.unlock();
+			auto newOpened = Utils::makeUnique<Open>(
+					videoSurface.getInstance().getVulkan(),
+					getSize(),
+					videoSurface.getScalingMode(),
+					videoSurface.getRenderPass(),
+					videoSurface.getBlendingMode(),
+					videoSurface.getTransform(),
+					videoSurface.getOpacity()
+			);
+			lock.lock();
+
+			opened = std::move(newOpened);
+		}
+
+		assert(lastFrames.empty()); //Any hasChanged() should return true
+		assert(lock.owns_lock());
+	}
+
+
 	void close(ZuazoBase& base) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		
 		videoIn.reset();
-		opened.reset();
 		lastFrames.clear();
+		opened.reset();
+
+		assert(!opened);
+	}
+
+	void asyncClose(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		auto& videoSurface = static_cast<VideoSurface&>(base);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
+		assert(lock.owns_lock());
+		
+		videoIn.reset();
+		lastFrames.clear();
+		auto oldOpened = std::move(opened);
+
+		if(oldOpened) {
+			lock.unlock();
+			oldOpened.reset();
+			lock.lock();
+		}
+
+		assert(!opened);
+		assert(lock.owns_lock());
 	}
 
 	bool hasChangedCallback(const LayerBase& base, const RendererBase& renderer) const {
@@ -828,7 +876,9 @@ VideoSurface::VideoSurface(	Instance& instance,
 		{ PadRef((*this)->videoIn) },
 		std::bind(&VideoSurfaceImpl::moved, std::ref(**this), std::placeholders::_1),
 		std::bind(&VideoSurfaceImpl::open, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1) )
+		std::bind(&VideoSurfaceImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1),
+		std::bind(&VideoSurfaceImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
 		renderer,
 		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),

@@ -391,9 +391,9 @@ struct CompositorImpl {
 	}
 
 	void open(ZuazoBase& base) {
-		assert(!opened);
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
+		assert(!opened);
 
 		if(static_cast<bool>(compositor.getVideoMode()) && static_cast<bool>(compositor.getDepthStencilFormat())) {
 			opened = Utils::makeUnique<Open>(
@@ -407,12 +407,55 @@ struct CompositorImpl {
 		hasChanged = true; //Signal rendering if needed
 	}
 
+	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		auto& compositor = static_cast<Compositor&>(base);
+		assert(&owner.get() == &compositor);
+		assert(!opened);
+		assert(lock.owns_lock());
+
+		if(static_cast<bool>(compositor.getVideoMode()) && static_cast<bool>(compositor.getDepthStencilFormat())) {
+			lock.unlock();
+			auto newOpened = Utils::makeUnique<Open>(
+				compositor.getInstance().getVulkan(),
+				compositor.getVideoMode().getFrameDescriptor(),
+				compositor.getDepthStencilFormat().value(),
+				compositor.getCamera()
+			);
+			lock.lock();
+
+			opened = std::move(newOpened);
+		}
+
+		hasChanged = true; //Signal rendering if needed
+		assert(lock.owns_lock());
+	}
+
 	void close(ZuazoBase& base) {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 		
 		videoOut.reset();
 		opened.reset();
+
+		assert(!opened);
+	}
+
+	void asyncClose(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		auto& compositor = static_cast<Compositor&>(base);
+		assert(&owner.get() == &compositor);
+		assert(lock.owns_lock());
+		
+		videoOut.reset();
+		auto oldOpened = std::move(opened);
+
+		if(oldOpened) {
+			lock.unlock();
+			oldOpened.reset();
+			lock.unlock();
+		}
+
+		assert(!opened);
+		assert(lock.owns_lock());
 	}
 
 	void update() {
@@ -565,7 +608,9 @@ Compositor::Compositor(	Instance& instance,
 		PadRef((*this)->videoOut),
 		std::bind(&CompositorImpl::moved, std::ref(**this), std::placeholders::_1),
 		std::bind(&CompositorImpl::open, std::ref(**this), std::placeholders::_1),
+		std::bind(&CompositorImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::close, std::ref(**this), std::placeholders::_1),
+		std::bind(&CompositorImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::update, std::ref(**this)) )
 	, VideoBase(
 		std::move(videoMode),
