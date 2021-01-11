@@ -124,6 +124,7 @@ static Zuazo::Math::Vec2f getRandomVec2f() {
 int main(int argc, const char** argv) {
 	if(argc != 2) {
 		std::cerr << "Usage: " << *argv << " <video file>" << std::endl;
+		std::terminate();
 	}
 
 	//Instantiate Zuazo as usual. Note that we're loading the Window module

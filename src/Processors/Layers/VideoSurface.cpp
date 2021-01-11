@@ -533,12 +533,8 @@ struct VideoSurfaceImpl {
 				0.0f, 0.0f											//min, max depth bounds
 			);
 
-			const auto colorBlendAttachmentState = Graphics::toVulkan(blendingMode);
 			const std::array colorBlendAttachments = {
-				colorBlendAttachmentState,
-				colorBlendAttachmentState,
-				colorBlendAttachmentState,
-				colorBlendAttachmentState
+				Graphics::toVulkan(blendingMode)
 			};
 
 			const vk::PipelineColorBlendStateCreateInfo colorBlend(

@@ -83,7 +83,7 @@ struct CompositorImpl {
 			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
-			, clearValues(Graphics::Drawtable::getClearValues(frameDesc, depthStencilFmt))
+			, clearValues(Graphics::RenderPass::getClearValues(depthStencilFmt))
 
 			, uniformProjectionMatrix(getProjectionMatrix(uniformBufferLayout, resources->uniformBuffer))
 			, uniformOutputColorTransfer(getOutputColorTransfer(uniformBufferLayout, resources->uniformBuffer))
@@ -126,7 +126,7 @@ struct CompositorImpl {
 			}
 
 			if(modifications.test(RECREATE_CLEAR_VALUES)) {
-				clearValues = Graphics::Drawtable::getClearValues(frameDesc, depthStencilFmt);
+				clearValues = Graphics::RenderPass::getClearValues(depthStencilFmt);
 			}
 
 			if(modifications.test(UPDATE_PROJECTION_MATRIX)) {
@@ -309,7 +309,7 @@ struct CompositorImpl {
 			const std::array poolSizes = {
 				vk::DescriptorPoolSize(
 					vk::DescriptorType::eUniformBuffer,					//Descriptor type
-					RendererBase::DESCRIPTOR_COUNT						//Descriptor count
+					RendererBase::DESCRIPTOR_UNIFORM_BUFFER_COUNT		//Descriptor count
 				)
 			};
 

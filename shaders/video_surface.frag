@@ -7,10 +7,7 @@
 //Vertex I/O
 layout(location = 0) in vec2 ex_texCoord;
 
-layout(location = 0) out vec4 out_color0;
-layout(location = 1) out vec4 out_color1;
-layout(location = 2) out vec4 out_color2;
-layout(location = 3) out vec4 out_color3;
+layout(location = 0) out vec4 out_color;
 
 //Uniform buffers
 layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
@@ -35,16 +32,12 @@ void main() {
 	color = ct_transferColor(inColorTransfer, outColorTransfer, color);
 
 	//Apply the opacity to it
-	color.a *= opacity;
+	color.a = opacity;
 
 	if(color.a == 0.0f) {
 		discard;
 	} else {
-		//Output the data
-		ct_output(
-			outColorTransfer, color,
-			out_color0, out_color1, out_color2, out_color3			
-		);
+		out_color = color;
 	}
 }
  
