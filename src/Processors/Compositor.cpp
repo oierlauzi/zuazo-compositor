@@ -2,7 +2,7 @@
 
 #include <zuazo/LayerBase.h>
 #include <zuazo/Graphics/CommandBuffer.h>
-#include <zuazo/Graphics/StagedBuffer.h>
+#include <zuazo/Graphics/UniformBuffer.h>
 #include <zuazo/Graphics/Drawtable.h>
 #include <zuazo/Graphics/CommandBufferPool.h>
 #include <zuazo/Signal/Input.h>
@@ -26,16 +26,8 @@ namespace Zuazo::Processors {
 
 struct CompositorImpl {
 	struct Open {
-		enum DescriptorLayouts {
-			DESCRIPTOR_SET_COMPOSITOR,
-
-			DESCRIPTOR_SET_COUNT
-		};
-
-		using CommandPool = Utils::Pool<Graphics::CommandBuffer>;
-
 		struct Resources {
-			Resources(	Graphics::StagedBuffer uniformBuffer,
+			Resources(	Graphics::UniformBuffer uniformBuffer,
 						vk::UniqueDescriptorPool descriptorPool )
 				: uniformBuffer(std::move(uniformBuffer))
 				, descriptorPool(std::move(descriptorPool))
@@ -44,7 +36,7 @@ struct CompositorImpl {
 
 			~Resources() = default;
 
-			Graphics::StagedBuffer								uniformBuffer;
+			Graphics::UniformBuffer								uniformBuffer;
 			vk::UniqueDescriptorPool							descriptorPool;
 		};
 
@@ -54,7 +46,6 @@ struct CompositorImpl {
 
 		const Graphics::Vulkan& 					vulkan;
 
-		RendererBase::UniformBufferLayout			uniformBufferLayout;
 		std::shared_ptr<Resources>					resources;
 		vk::DescriptorSet							descriptorSet;
 		vk::PipelineLayout							pipelineLayout;
@@ -64,32 +55,23 @@ struct CompositorImpl {
 		
 		std::vector<vk::ClearValue>					clearValues;
 
-		Math::Mat4x4f&								uniformProjectionMatrix;
-		Utils::BufferView<std::byte>				uniformOutputColorTransfer;
-		Utils::Area									uniformFlushArea;
-		vk::PipelineStageFlags						uniformFlushStages;
-
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& frameDesc,
 				DepthStencilFormat depthStencilFmt,
 				const Compositor::Camera& cam )
 			: vulkan(vulkan)
-			, uniformBufferLayout(RendererBase::getUniformBufferLayout(vulkan))
-			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan, uniformBufferLayout),
+			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
 			, descriptorSet(createDescriptorSet(vulkan, *(resources->descriptorPool)))
-			, pipelineLayout(RendererBase::getPipelineLayout(vulkan))
+			, pipelineLayout(RendererBase::getBasePipelineLayout(vulkan))
 
 			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
 			, clearValues(Graphics::RenderPass::getClearValues(depthStencilFmt))
-
-			, uniformProjectionMatrix(getProjectionMatrix(uniformBufferLayout, resources->uniformBuffer))
-			, uniformOutputColorTransfer(getOutputColorTransfer(uniformBufferLayout, resources->uniformBuffer))
 		{
 			//Bind the uniform buffers to the descriptor sets
-			writeDescriptorSets();
+			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 
 			//Update the contents of the uniforms buffers
 			updateProjectionMatrixUniform(cam);
@@ -183,21 +165,13 @@ struct CompositorImpl {
 			//Execute all the command buffers gathered from the layers
 			if(!renderer.getLayers().empty()) {
 				//Flush the uniform buffer, as it will be used
-				resources->uniformBuffer.flushData(
-					vulkan,
-					uniformFlushArea,
-					vulkan.getGraphicsQueueIndex(),
-					vk::AccessFlagBits::eUniformRead,
-					uniformFlushStages
-				);
-				uniformFlushArea = {};
-				uniformFlushStages = {};
+				resources->uniformBuffer.flush(vulkan);
 
 				//Bind all descriptors
 				commandBuffer->bindDescriptorSets(
 					vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
 					pipelineLayout,													//Pipeline layout
-					DESCRIPTOR_SET_COMPOSITOR,										//First index
+					RendererBase::DESCRIPTOR_SET,									//First index
 					descriptorSet,													//Descriptor sets
 					{}																//Dynamic offsets
 				);
@@ -225,67 +199,25 @@ struct CompositorImpl {
 			resources->uniformBuffer.waitCompletion(vulkan);
 
 			const auto size = drawtable.getFrameDescriptor().calculateSize();
-			uniformProjectionMatrix = cam.calculateMatrix(size);
-			
-			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
-			uniformFlushStages |= vk::PipelineStageFlagBits::eVertexShader;
+			const auto mtx = cam.calculateMatrix(size);
+			resources->uniformBuffer.write(
+				vulkan,
+				RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX,
+				&mtx,
+				sizeof(mtx)
+			);
 		}
 
 		void updateColorTransferUniform() {
 			resources->uniformBuffer.waitCompletion(vulkan);
 			
 			const auto outputColorTransfer = drawtable.getOutputColorTransfer();
-			assert(outputColorTransfer.size() == uniformOutputColorTransfer.size());
-			std::memcpy(
-				uniformOutputColorTransfer.data(),
+			resources->uniformBuffer.write(
+				vulkan,
+				RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,
 				outputColorTransfer.data(),
-				uniformOutputColorTransfer.size()
+				outputColorTransfer.size()
 			);
-
-			uniformFlushArea |= uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER];
-			uniformFlushStages |= vk::PipelineStageFlagBits::eFragmentShader;
-		}
-
-		void writeDescriptorSets() {
-			const std::array projectionMatrixBuffers = {
-				vk::DescriptorBufferInfo(
-					resources->uniformBuffer.getBuffer(),												//Buffer
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].offset(),	//Offset
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX].size()		//Size
-				)
-			};
-			const std::array colorTransferBuffers = {
-				vk::DescriptorBufferInfo(
-					resources->uniformBuffer.getBuffer(),											//Buffer
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER].offset(),	//Offset
-					uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER].size()		//Size
-				)
-			};
-
-			const std::array writeDescriptorSets = {
-				vk::WriteDescriptorSet( //Viewport UBO
-					descriptorSet,											//Descriptor set
-					RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX,		//Binding
-					0, 														//Index
-					projectionMatrixBuffers.size(),							//Descriptor count		
-					vk::DescriptorType::eUniformBuffer,						//Descriptor type
-					nullptr, 												//Images 
-					projectionMatrixBuffers.data(), 						//Buffers
-					nullptr													//Texel buffers
-				),
-				vk::WriteDescriptorSet( //ColorTransfer UBO
-					descriptorSet,											//Descriptor set
-					RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,		//Binding
-					0, 														//Index
-					colorTransferBuffers.size(),							//Descriptor count		
-					vk::DescriptorType::eUniformBuffer,						//Descriptor type
-					nullptr, 												//Images 
-					colorTransferBuffers.data(), 							//Buffers
-					nullptr													//Texel buffers
-				)
-			};
-
-			vulkan.updateDescriptorSets(writeDescriptorSets, {});
 		}
 
 		static Graphics::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
@@ -295,24 +227,14 @@ struct CompositorImpl {
 			return Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
 		}
 
-		static Graphics::StagedBuffer createUniformBuffer(	const Graphics::Vulkan& vulkan, 
-															const RendererBase::UniformBufferLayout& layout ) 
+		static Graphics::UniformBuffer createUniformBuffer(const Graphics::Vulkan& vulkan) 
 		{
-			return Graphics::StagedBuffer(
-				vulkan,
-				vk::BufferUsageFlagBits::eUniformBuffer,
-				layout.back().end()
-			);
+			return Graphics::UniformBuffer(vulkan, RendererBase::getUniformBufferSizes());
 		}
 
 		static vk::UniqueDescriptorPool createDescriptorPool(const Graphics::Vulkan& vulkan){
-			const std::array poolSizes = {
-				vk::DescriptorPoolSize(
-					vk::DescriptorType::eUniformBuffer,					//Descriptor type
-					RendererBase::DESCRIPTOR_UNIFORM_BUFFER_COUNT		//Descriptor count
-				)
-			};
-
+			const auto poolSizes = RendererBase::getDescriptorPoolSizes();
+			
 			const vk::DescriptorPoolCreateInfo createInfo(
 				{},														//Flags
 				1,														//Descriptor set count
@@ -351,20 +273,6 @@ struct CompositorImpl {
 				vulkan.getGraphicsQueueIndex(),
 				vk::CommandBufferLevel::ePrimary
 			);
-		}
-
-		static Math::Mat4x4f& getProjectionMatrix(	const RendererBase::UniformBufferLayout& uniformBufferLayout,
-													Graphics::StagedBuffer& uniformBuffer )
-		{
-			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_PROJECTION_MATRIX];
-			return *(reinterpret_cast<Math::Mat4x4f*>(area.begin(uniformBuffer.data())));
-		}
-
-		static Utils::BufferView<std::byte> getOutputColorTransfer(	const RendererBase::UniformBufferLayout& uniformBufferLayout,
-																	Graphics::StagedBuffer& uniformBuffer )
-		{
-			const auto& area = uniformBufferLayout[RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER];
-			return Utils::BufferView<std::byte>(area.begin(uniformBuffer.data()), area.size());
 		}
 	};
 

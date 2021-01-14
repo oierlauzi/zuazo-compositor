@@ -5,6 +5,7 @@
 #include <zuazo/Utils/StaticId.h>
 #include <zuazo/Utils/Pool.h>
 #include <zuazo/Graphics/StagedBuffer.h>
+#include <zuazo/Graphics/UniformBuffer.h>
 #include <zuazo/Graphics/CommandBufferPool.h>
 #include <zuazo/Graphics/ColorTransfer.h>
 
@@ -29,7 +30,7 @@ struct VideoSurfaceImpl {
 		};
 
 		enum DescriptorSets {
-			DESCRIPTOR_SET_RENDERER,
+			DESCRIPTOR_SET_RENDERER = RendererBase::DESCRIPTOR_SET,
 			DESCRIPTOR_SET_VIDEOSURFACE,
 			DESCRIPTOR_SET_FRAME,
 
@@ -55,13 +56,11 @@ struct VideoSurfaceImpl {
 			Utils::Area(sizeof(int32_t), 	sizeof(float)  	)	//LAYERDATA_UNIFORM_OPACITY
 		};
 
-
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
-		using UniformBufferLayout = std::array<Utils::Area, DESCRIPTOR_COUNT>;
 
 		struct Resources {
 			Resources(	Graphics::StagedBuffer vertexBuffer,
-						Graphics::StagedBuffer uniformBuffer,
+						Graphics::UniformBuffer uniformBuffer,
 						vk::UniqueDescriptorPool descriptorPool )
 				: vertexBuffer(std::move(vertexBuffer))
 				, uniformBuffer(std::move(uniformBuffer))
@@ -72,13 +71,12 @@ struct VideoSurfaceImpl {
 			~Resources() = default;
 
 			Graphics::StagedBuffer								vertexBuffer;
-			Graphics::StagedBuffer								uniformBuffer;
+			Graphics::UniformBuffer								uniformBuffer;
 			vk::UniqueDescriptorPool							descriptorPool;
 		};
 
 		const Graphics::Vulkan&								vulkan;
 
-		UniformBufferLayout									uniformBufferLayout;
 		std::shared_ptr<Resources>							resources;
 		Graphics::Frame::Geometry							geometry;
 		vk::Filter											filter;
@@ -86,12 +84,6 @@ struct VideoSurfaceImpl {
 
 		vk::PipelineLayout									pipelineLayout;
 		std::shared_ptr<vk::UniquePipeline>					pipeline;
-
-		Math::Mat4x4f&										uniformModelMatrix;
-		int32_t&											uniformSampleMode;
-		float&												uniformOpacity;
-		Utils::Area											uniformFlushArea;
-		vk::PipelineStageFlags								uniformFlushStages;
 
 		Open(	const Graphics::Vulkan& vulkan,
 				Math::Vec2f size,
@@ -101,22 +93,16 @@ struct VideoSurfaceImpl {
 				const Math::Transformf& transform,
 				float opacity ) 
 			: vulkan(vulkan)
-			, uniformBufferLayout(createUniformBufferLayout(vulkan))
 			, resources(Utils::makeShared<Resources>(	createVertexBuffer(vulkan),
-														createUniformBuffer(vulkan, uniformBufferLayout),
+														createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
 			, filter(vk::Filter::eNearest)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
 			, pipelineLayout(createPipelineLayout(vulkan, filter))
 			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
-			, uniformModelMatrix(getModelMatrix(uniformBufferLayout, resources->uniformBuffer))
-			, uniformSampleMode(getSampleMode(uniformBufferLayout, resources->uniformBuffer))
-			, uniformOpacity(getOpacity(uniformBufferLayout, resources->uniformBuffer))
-			, uniformFlushArea()
-			, uniformFlushStages()
 		{
-			writeDescriptorSets();
+			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 			updateModelMatrixUniform(transform);
 			updateSampleModeUniform(0);
 			updateOpacityUniform(opacity);
@@ -147,6 +133,10 @@ struct VideoSurfaceImpl {
 				recreate(renderPass, blendingMode);
 			}
 
+			const auto& uniformSampleMode = *reinterpret_cast<const int32_t*>(
+				resources->uniformBuffer.getBindingData(DESCRIPTOR_BINDING_LAYERDATA).data() +
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].offset()
+			);
 			if(uniformSampleMode != newDesc.samplingMode) {
 				//Sampling mode has changed
 				updateSampleModeUniform(newDesc.samplingMode);
@@ -172,15 +162,7 @@ struct VideoSurfaceImpl {
 			}
 
 			//Flush the unform buffer
-			resources->uniformBuffer.flushData(
-				vulkan,
-				uniformFlushArea,
-				vulkan.getGraphicsQueueIndex(),
-				vk::AccessFlagBits::eUniformRead,
-				uniformFlushStages
-			);
-			uniformFlushArea = {};
-			uniformFlushStages = {};
+			resources->uniformBuffer.flush(vulkan);
 
 			//Bind the pipeline and its descriptor sets
 			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
@@ -222,85 +204,42 @@ struct VideoSurfaceImpl {
 			assert(resources);
 			resources->uniformBuffer.waitCompletion(vulkan);
 
-			uniformModelMatrix = transform.calculateMatrix();
-			
-			uniformFlushArea |= uniformBufferLayout[DESCRIPTOR_BINDING_MODEL_MATRIX];
-			uniformFlushStages |= vk::PipelineStageFlagBits::eVertexShader;
+			const auto mtx = transform.calculateMatrix();
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_MODEL_MATRIX,
+				&mtx,
+				sizeof(mtx)
+			);
 		}
 
-		void updateSampleModeUniform(uint32_t sampleMode) {
+		void updateSampleModeUniform(int32_t sampleMode) {
 			assert(resources);
 			resources->uniformBuffer.waitCompletion(vulkan);			
 
-			uniformSampleMode = sampleMode;
-			
-			const auto updateArea = Utils::Area(
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].begin() + uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].begin(),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].size()
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_LAYERDATA,
+				&sampleMode,
+				sizeof(sampleMode),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].offset()
 			);
-
-			uniformFlushArea |= updateArea;
-			uniformFlushStages |= vk::PipelineStageFlagBits::eFragmentShader;
 		}
 
 		void updateOpacityUniform(float opa) {
 			assert(resources);
 			resources->uniformBuffer.waitCompletion(vulkan);			
 
-			uniformOpacity = opa;
-
-			const auto updateArea = Utils::Area(
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].begin() + uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].begin(),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].size()
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_LAYERDATA,
+				&opa,
+				sizeof(opa),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].offset()
 			);
-			
-			uniformFlushArea |= updateArea;
-			uniformFlushStages |= vk::PipelineStageFlagBits::eFragmentShader;
 		}
 
 	private:
-		void writeDescriptorSets() {
-			const std::array modelMatrixBuffers = {
-				vk::DescriptorBufferInfo(
-					resources->uniformBuffer.getBuffer(),							//Buffer
-					uniformBufferLayout[DESCRIPTOR_BINDING_MODEL_MATRIX].offset(),	//Offset
-					uniformBufferLayout[DESCRIPTOR_BINDING_MODEL_MATRIX].size()		//Size
-				)
-			};
-			const std::array opacityBuffers = {
-				vk::DescriptorBufferInfo(
-					resources->uniformBuffer.getBuffer(),							//Buffer
-					uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].offset(),		//Offset
-					uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA].size()		//Size
-				)
-			};
-
-			const std::array writeDescriptorSets = {
-				vk::WriteDescriptorSet( //Model matrix UBO
-					descriptorSet,											//Descriptor set
-					DESCRIPTOR_BINDING_MODEL_MATRIX,						//Binding
-					0, 														//Index
-					modelMatrixBuffers.size(),								//Descriptor count		
-					vk::DescriptorType::eUniformBuffer,						//Descriptor type
-					nullptr, 												//Images 
-					modelMatrixBuffers.data(), 								//Buffers
-					nullptr													//Texel buffers
-				),
-				vk::WriteDescriptorSet( //Layer Data UBO
-					descriptorSet,											//Descriptor set
-					DESCRIPTOR_BINDING_LAYERDATA,							//Binding
-					0, 														//Index
-					opacityBuffers.size(),									//Descriptor count		
-					vk::DescriptorType::eUniformBuffer,						//Descriptor type
-					nullptr, 												//Images 
-					opacityBuffers.data(), 									//Buffers
-					nullptr													//Texel buffers
-				)
-			};
-
-			vulkan.updateDescriptorSets(writeDescriptorSets, {});
-		}
-
 		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan) {
 			return Graphics::StagedBuffer(
 				vulkan,
@@ -344,30 +283,13 @@ struct VideoSurfaceImpl {
 			return result;
 		}
 
-		static UniformBufferLayout createUniformBufferLayout(const Graphics::Vulkan& vulkan) {
-			const auto& limits = vulkan.getPhysicalDeviceProperties().limits;
-
-			constexpr size_t modelMatrixOff = 0;
-			constexpr size_t modelMatrixSize = sizeof(glm::mat4);
-			
-			const size_t layerDataOff = Utils::align(
-				modelMatrixOff + modelMatrixSize, 
-				limits.minUniformBufferOffsetAlignment
-			);
-			constexpr size_t layerDataSize = LAYERDATA_UNIFORM_LAYOUT.back().end();
-
-			return UniformBufferLayout {
-				Utils::Area(modelMatrixOff,	modelMatrixSize),	//Projection matrix
-				Utils::Area(layerDataOff,	layerDataSize )		//Color Transfer
+		static Graphics::UniformBuffer createUniformBuffer(const Graphics::Vulkan& vulkan) {
+			constexpr std::array uniformBufferSizes = {
+				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(glm::mat4) ),
+				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_LAYERDATA,		LAYERDATA_UNIFORM_LAYOUT.back().end() )
 			};
-		};
 
-		static Graphics::StagedBuffer createUniformBuffer(const Graphics::Vulkan& vulkan, const UniformBufferLayout& layout) {
-			return Graphics::StagedBuffer(
-				vulkan,
-				vk::BufferUsageFlagBits::eUniformBuffer,
-				layout.back().end()
-			);
+			return Graphics::UniformBuffer(vulkan, uniformBufferSizes);
 		}
 
 		static vk::UniqueDescriptorPool createDescriptorPool(const Graphics::Vulkan& vulkan){
@@ -573,29 +495,6 @@ struct VideoSurfaceImpl {
 			);
 
 			return vulkan.createGraphicsPipeline(createInfo);
-		}
-
-		static Math::Mat4x4f& getModelMatrix(	const UniformBufferLayout& uniformBufferLayout, 
-												Graphics::StagedBuffer& uniformBuffer ) 
-		{
-			const auto& area = uniformBufferLayout[DESCRIPTOR_BINDING_MODEL_MATRIX];
-			return *(reinterpret_cast<Math::Mat4x4f*>(area.begin(uniformBuffer.data())));
-		}
-
-		static int32_t& getSampleMode(	const UniformBufferLayout& uniformBufferLayout, 
-										Graphics::StagedBuffer& uniformBuffer ) 
-		{
-			const auto& area1 = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
-			const auto& area2 = LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE];
-			return *(reinterpret_cast<int32_t*>(area1.begin(area2.begin(uniformBuffer.data()))));
-		}
-
-		static float& getOpacity(	const UniformBufferLayout& uniformBufferLayout, 
-									Graphics::StagedBuffer& uniformBuffer ) 
-		{
-			const auto& area1 = uniformBufferLayout[DESCRIPTOR_BINDING_LAYERDATA];
-			const auto& area2 = LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY];
-			return *(reinterpret_cast<float*>(area1.begin(area2.begin(uniformBuffer.data()))));
 		}
 
 	};
