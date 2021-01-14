@@ -283,20 +283,24 @@ struct VideoSurfaceImpl {
 			return result;
 		}
 
-		static Graphics::UniformBuffer createUniformBuffer(const Graphics::Vulkan& vulkan) {
-			constexpr std::array uniformBufferSizes = {
+		static Utils::BufferView<const std::pair<uint32_t, size_t>> getUniformBufferSizes() noexcept {
+			static const std::array uniformBufferSizes = {
 				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(glm::mat4) ),
 				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_LAYERDATA,		LAYERDATA_UNIFORM_LAYOUT.back().end() )
 			};
 
-			return Graphics::UniformBuffer(vulkan, uniformBufferSizes);
+			return uniformBufferSizes;
+		}
+
+		static Graphics::UniformBuffer createUniformBuffer(const Graphics::Vulkan& vulkan) {
+			return Graphics::UniformBuffer(vulkan, getUniformBufferSizes());
 		}
 
 		static vk::UniqueDescriptorPool createDescriptorPool(const Graphics::Vulkan& vulkan){
 			const std::array poolSizes = {
 				vk::DescriptorPoolSize(
 					vk::DescriptorType::eUniformBuffer,					//Descriptor type
-					DESCRIPTOR_COUNT									//Descriptor count
+					getUniformBufferSizes().size()						//Descriptor count
 				)
 			};
 
