@@ -96,7 +96,7 @@ static Zuazo::Processors::Compositor createCompositor(Zuazo::Instance& instance)
 		Zuazo::Utils::MustBe<Zuazo::ColorTransferFunction>(Zuazo::ColorTransferFunction::LINEAR),
 		Zuazo::Utils::MustBe<Zuazo::ColorSubsampling>(Zuazo::ColorSubsampling::RB_444),
 		Zuazo::Utils::MustBe<Zuazo::ColorRange>(Zuazo::ColorRange::FULL),
-		Zuazo::Utils::MustBe<Zuazo::ColorFormat>(Zuazo::ColorFormat::R16fG16fB16f)	
+		Zuazo::Utils::MustBe<Zuazo::ColorFormat>(Zuazo::ColorFormat::R16fG16fB16fA16f)	
 	);
 
 	const Zuazo::Utils::Limit<Zuazo::DepthStencilFormat> depthStencil(
