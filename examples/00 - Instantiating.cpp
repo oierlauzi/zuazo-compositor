@@ -49,7 +49,6 @@ static Zuazo::Consumers::WindowRenderer createWindow(Zuazo::Instance& instance) 
 		monitor							//Monitor for setting fullscreen
 	);
 
-	window.setWindowName(window.getName());
 	window.setResizeable(false); //Disable resizeing, as extra care needs to be taken
 	window.open();
 
