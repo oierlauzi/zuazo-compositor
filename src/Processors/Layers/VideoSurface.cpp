@@ -45,15 +45,13 @@ struct VideoSurfaceImpl {
 		};
 
 		enum LayerDataUniforms {
-			LAYERDATA_UNIFORM_SAMPLEMODE,
 			LAYERDATA_UNIFORM_OPACITY,
 
 			LAYERDATA_UNIFORM_COUNT
 		};
 
 		static constexpr std::array<Utils::Area, LAYERDATA_UNIFORM_COUNT> LAYERDATA_UNIFORM_LAYOUT = {
-			Utils::Area(0, 					sizeof(int32_t)	), 	//LAYERDATA_UNIFORM_SAMPLEMODE
-			Utils::Area(sizeof(int32_t), 	sizeof(float)  	)	//LAYERDATA_UNIFORM_OPACITY
+			Utils::Area(0, 	sizeof(float)  	)	//LAYERDATA_UNIFORM_OPACITY
 		};
 
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
@@ -79,17 +77,15 @@ struct VideoSurfaceImpl {
 
 		std::shared_ptr<Resources>							resources;
 		Graphics::Frame::Geometry							geometry;
-		vk::Filter											filter;
 		vk::DescriptorSet									descriptorSet;
 
+		vk::DescriptorSetLayout								frameDescriptorSetLayout;
 		vk::PipelineLayout									pipelineLayout;
 		std::shared_ptr<vk::UniquePipeline>					pipeline;
 
 		Open(	const Graphics::Vulkan& vulkan,
 				Math::Vec2f size,
 				ScalingMode scalingMode,
-				Graphics::RenderPass renderPass,
-				BlendingMode blendingMode,
 				const Math::Transformf& transform,
 				float opacity ) 
 			: vulkan(vulkan)
@@ -97,14 +93,13 @@ struct VideoSurfaceImpl {
 														createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
 			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
-			, filter(vk::Filter::eNearest)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
-			, pipelineLayout(createPipelineLayout(vulkan, filter))
-			, pipeline(Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode)))
+			, frameDescriptorSetLayout()
+			, pipelineLayout()
+			, pipeline()
 		{
 			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 			updateModelMatrixUniform(transform);
-			updateSampleModeUniform(0);
 			updateOpacityUniform(opacity);
 		}
 
@@ -116,40 +111,19 @@ struct VideoSurfaceImpl {
 		void recreate(	Graphics::RenderPass renderPass,
 						BlendingMode blendingMode ) 
 		{
-			pipelineLayout = createPipelineLayout(vulkan, filter);
 			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
 		}
 
-		void configureSampler(	ScalingFilter filt, 
-								const Graphics::Frame& frame, 
-								Graphics::RenderPass renderPass, 
-								BlendingMode blendingMode ) 
-		{
-			const auto newDesc = frame.getColorTransfer().getSamplerDescriptor(filt);
-
-			if(filter != newDesc.filter) {
-				//Filter has changed
-				filter = newDesc.filter;
-				recreate(renderPass, blendingMode);
-			}
-
-			const auto& uniformSampleMode = *reinterpret_cast<const int32_t*>(
-				resources->uniformBuffer.getBindingData(DESCRIPTOR_BINDING_LAYERDATA).data() +
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].offset()
-			);
-			if(uniformSampleMode != newDesc.samplingMode) {
-				//Sampling mode has changed
-				updateSampleModeUniform(newDesc.samplingMode);
-			}
-
-		}
-
-		void draw(Graphics::CommandBuffer& cmd, const Video& frame) {
+		void draw(	Graphics::CommandBuffer& cmd, 
+					const Video& frame, 
+					ScalingFilter filter,
+					Graphics::RenderPass renderPass,
+					BlendingMode blendingMode ) 
+		{				
 			assert(resources);			
-			assert(pipeline);
 			assert(frame);
 
-			//Update the vertexbuffer if needed
+			//Update the vertex buffer if needed
 			resources->vertexBuffer.waitCompletion(vulkan);
 			if(geometry.useFrame(*frame)) {
 				//Buffer has changed
@@ -163,6 +137,13 @@ struct VideoSurfaceImpl {
 
 			//Flush the unform buffer
 			resources->uniformBuffer.flush(vulkan);
+
+			//Configure the sampler for propper operation
+			configureSampler(*frame, filter, renderPass, blendingMode);
+			assert(frameDescriptorSetLayout);
+			assert(pipelineLayout);
+			assert(pipeline);
+			assert(*pipeline);
 
 			//Bind the pipeline and its descriptor sets
 			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
@@ -213,19 +194,6 @@ struct VideoSurfaceImpl {
 			);
 		}
 
-		void updateSampleModeUniform(int32_t sampleMode) {
-			assert(resources);
-			resources->uniformBuffer.waitCompletion(vulkan);			
-
-			resources->uniformBuffer.write(
-				vulkan,
-				DESCRIPTOR_BINDING_LAYERDATA,
-				&sampleMode,
-				sizeof(sampleMode),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_SAMPLEMODE].offset()
-			);
-		}
-
 		void updateOpacityUniform(float opa) {
 			assert(resources);
 			resources->uniformBuffer.waitCompletion(vulkan);			
@@ -240,6 +208,20 @@ struct VideoSurfaceImpl {
 		}
 
 	private:
+		void configureSampler(	const Graphics::Frame& frame, 
+								ScalingFilter filter,
+								Graphics::RenderPass renderPass,
+								BlendingMode blendingMode ) 
+		{
+			const auto newDescriptorSetLayout = frame.getDescriptorSetLayout(filter);
+			if(frameDescriptorSetLayout != newDescriptorSetLayout) {
+				frameDescriptorSetLayout = newDescriptorSetLayout;
+				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
+				recreate(renderPass, blendingMode);
+			}
+		}
+
+
 		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan) {
 			return Graphics::StagedBuffer(
 				vulkan,
@@ -321,18 +303,17 @@ struct VideoSurfaceImpl {
 		}
 
 		static vk::PipelineLayout createPipelineLayout(	const Graphics::Vulkan& vulkan,
-														vk::Filter filter ) 
+														vk::DescriptorSetLayout frameDescriptorSetLayout ) 
 		{
-			static const std::array<Utils::StaticId, Graphics::Frame::FILTER_COUNT> ids;
-			const auto layoutId = ids[static_cast<size_t>(filter)];
+			static std::unordered_map<vk::DescriptorSetLayout, const Utils::StaticId> ids;
+			const auto& id = ids[frameDescriptorSetLayout]; //TODO make it thread safe
 
-			auto result = vulkan.createPipelineLayout(layoutId);
-
+			auto result = vulkan.createPipelineLayout(id);
 			if(!result) {
 				const std::array layouts = {
 					RendererBase::getDescriptorSetLayout(vulkan), 			//DESCRIPTOR_SET_RENDERER
 					getDescriptorSetLayout(vulkan), 						//DESCRIPTOR_SET_VIDEOSURFACE
-					Graphics::Frame::getDescriptorSetLayout(vulkan, filter) //DESCRIPTOR_SET_FRAME
+					frameDescriptorSetLayout 								//DESCRIPTOR_SET_FRAME
 				};
 
 				const vk::PipelineLayoutCreateInfo createInfo(
@@ -341,7 +322,7 @@ struct VideoSurfaceImpl {
 					0, nullptr											//Push constants
 				);
 
-				result = vulkan.createPipelineLayout(layoutId, createInfo);
+				result = vulkan.createPipelineLayout(id, createInfo);
 			}
 
 			return result;
@@ -539,8 +520,6 @@ struct VideoSurfaceImpl {
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
 					videoSurface.getScalingMode(),
-					videoSurface.getRenderPass(),
-					videoSurface.getBlendingMode(),
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
 			);
@@ -561,8 +540,6 @@ struct VideoSurfaceImpl {
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
 					videoSurface.getScalingMode(),
-					videoSurface.getRenderPass(),
-					videoSurface.getBlendingMode(),
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
 			);
@@ -639,14 +616,13 @@ struct VideoSurfaceImpl {
 			
 			//Draw
 			if(frame) {
-				opened->configureSampler(
-					videoSurface.getScalingFilter(), 
-					*frame, 
+				opened->draw(
+					cmd, 
+					frame, 
+					videoSurface.getScalingFilter(),
 					videoSurface.getRenderPass(),
 					videoSurface.getBlendingMode()
 				);
-
-				opened->draw(cmd, frame);
 			}
 
 			//Update the state for next hasChanged()
@@ -748,8 +724,6 @@ private:
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
 					videoSurface.getScalingMode(),
-					renderPass,
-					blendingMode,
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
 				);

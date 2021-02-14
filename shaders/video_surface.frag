@@ -15,7 +15,6 @@ layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
 };
 
 layout(set = 1, binding = 1) uniform LayerDataBlock {
-	int sampleMode;
 	float opacity;
 };
 
@@ -26,18 +25,18 @@ layout(set = 2, binding = ct_DATA_BINDING) uniform InputColorTransferBlock {
 
 void main() {
 	//Sample the color from the frame
-	vec4 color = ct_texture(sampleMode, inColorTransfer, samplers, ex_texCoord);
+	vec4 color = ct_texture(ct_SAMPLE_MODE_PASSTHOUGH, inColorTransfer, samplers, ex_texCoord); //TODO
 
 	//Perform colorspace conversion
 	color = ct_transferColor(inColorTransfer, outColorTransfer, color);
 
 	//Apply the opacity to it
-	color.a = opacity;
+	color.a *= opacity;
 
 	if(color.a == 0.0f) {
 		discard;
 	} else {
-		out_color = color;
+		out_color = ct_premultiply_alpha(color);
 	}
 }
  
