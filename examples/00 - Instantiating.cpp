@@ -1,5 +1,5 @@
 /*
- * This example shows how to buil a simple video switcher
+ * This example shows how to render to a off-screen renderer
  * 
  * How to compile:
  * c++ 00\ -\ Instantiating.cpp -std=c++17 -Wall -Wextra -lzuazo -lzuazo-window -lzuazo-ffmpeg -lzuazo-compositor -lglfw -ldl -lpthread -lavutil -lavformat -lavcodec -lswscale

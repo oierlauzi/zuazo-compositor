@@ -4,9 +4,11 @@
 
 #include "color_transfer.glsl"
 #include "frame.glsl"
+#include "bezier.glsl"
 
 //Vertex I/O
 layout(location = 0) in vec2 in_texCoord;
+layout(location = 1) in vec3 in_klm;
 
 layout(location = 0) out vec4 out_color;
 
@@ -23,19 +25,28 @@ layout(set = 1, binding = 1) uniform LayerDataBlock {
 frame_descriptor_set(2)
 
 void main() {
-	//Sample the color from the frame
+	/*//Sample the color from the frame
 	vec4 color = frame_texture(2, in_texCoord);
 
 	//Perform colorspace conversion
 	color = ct_transferColor(frame_color_transfer(2), outColorTransfer, color);
 
-	//Apply the opacity to it
-	color.a *= opacity;
+	//Obtain th signed distance to the curve
+	const float sDist = bezier3_eval(in_klm);
+
+	//Apply the opacity and bezier alpha to it
+	color.a *= opacity * clamp(0.5f - sDist, 0.0f, 1.0f);
 
 	if(color.a == 0.0f) {
 		discard;
 	} else {
 		out_color = ct_premultiply_alpha(color);
-	}
+	}*/
+
+	const float sDist = bezier3_eval(in_klm);
+	const float l = clamp(0.5f - sDist, 0.0f, 1.0f);
+	out_color = vec4(l, l, l, 1.0f);
+
+	//out_color = vec4(1.0f);
 }
  

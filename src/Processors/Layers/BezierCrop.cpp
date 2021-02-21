@@ -1,4 +1,4 @@
-#include <zuazo/Processors/Layers/VideoSurface.h>
+#include <zuazo/Processors/Layers/BezierCrop.h>
 
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
@@ -8,23 +8,40 @@
 #include <zuazo/Graphics/UniformBuffer.h>
 #include <zuazo/Graphics/CommandBufferPool.h>
 #include <zuazo/Graphics/ColorTransfer.h>
+#include <zuazo/Math/Geometry.h>
+#include <zuazo/Math/Absolute.h>
+
 
 #include <utility>
 #include <memory>
 #include <unordered_map>
+#include <iostream> //TODO
 
 namespace Zuazo::Processors::Layers {
 
-struct VideoSurfaceImpl {
+struct BezierCropImpl {
 	struct Open {
 		struct Vertex {
+			Vertex(	Math::Vec2f position, 
+					Math::Vec2f texCoord = Math::Vec2f(0, 0), 
+					Math::Vec3f klm = Math::Vec3f(-1, 0, 0) )
+				: position(position)
+				, texCoord(texCoord)
+				, klm(klm)
+			{
+			}
+
 			Math::Vec2f position;
 			Math::Vec2f texCoord;
+			Math::Vec3f klm;
 		};
+
+		using Index = uint16_t;
 
 		enum VertexLayout {
 			VERTEX_LOCATION_POSITION,
 			VERTEX_LOCATION_TEXCOORD,
+			VERTEX_LOCATION_KLM,
 
 			VERTEX_LOCATION_COUNT
 		};
@@ -57,10 +74,10 @@ struct VideoSurfaceImpl {
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
 
 		struct Resources {
-			Resources(	Graphics::StagedBuffer vertexBuffer,
-						Graphics::UniformBuffer uniformBuffer,
+			Resources(	Graphics::UniformBuffer uniformBuffer,
 						vk::UniqueDescriptorPool descriptorPool )
-				: vertexBuffer(std::move(vertexBuffer))
+				: vertexBuffer()
+				, indexBuffer()
 				, uniformBuffer(std::move(uniformBuffer))
 				, descriptorPool(std::move(descriptorPool))
 			{
@@ -69,6 +86,7 @@ struct VideoSurfaceImpl {
 			~Resources() = default;
 
 			Graphics::StagedBuffer								vertexBuffer;
+			Graphics::StagedBuffer								indexBuffer;
 			Graphics::UniformBuffer								uniformBuffer;
 			vk::UniqueDescriptorPool							descriptorPool;
 		};
@@ -76,7 +94,6 @@ struct VideoSurfaceImpl {
 		const Graphics::Vulkan&								vulkan;
 
 		std::shared_ptr<Resources>							resources;
-		Graphics::Frame::Geometry							geometry;
 		vk::DescriptorSet									descriptorSet;
 
 		vk::DescriptorSetLayout								frameDescriptorSetLayout;
@@ -84,15 +101,13 @@ struct VideoSurfaceImpl {
 		std::shared_ptr<vk::UniquePipeline>					pipeline;
 
 		Open(	const Graphics::Vulkan& vulkan,
-				Math::Vec2f size,
+				const BezierCrop::BezierLoop& shape,
 				ScalingMode scalingMode,
 				const Math::Transformf& transform,
 				float opacity ) 
 			: vulkan(vulkan)
-			, resources(Utils::makeShared<Resources>(	createVertexBuffer(vulkan),
-														createUniformBuffer(vulkan),
+			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
-			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
 			, frameDescriptorSetLayout()
 			, pipelineLayout()
@@ -101,6 +116,7 @@ struct VideoSurfaceImpl {
 			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 			updateModelMatrixUniform(transform);
 			updateOpacityUniform(opacity);
+			fillVertexBuffer(shape);
 		}
 
 		~Open() {
@@ -123,62 +139,74 @@ struct VideoSurfaceImpl {
 			assert(resources);			
 			assert(frame);
 
-			//Update the vertex buffer if needed
-			resources->vertexBuffer.waitCompletion(vulkan);
-			if(geometry.useFrame(*frame)) {
-				//Buffer has changed
-				resources->vertexBuffer.flushData(
-					vulkan,
-					vulkan.getGraphicsQueueIndex(),
-					vk::AccessFlagBits::eVertexAttributeRead,
-					vk::PipelineStageFlagBits::eVertexInput
+			//Only draw if geometry is defined
+			if(resources->indexBuffer.size()) {
+				assert(resources->vertexBuffer.size());
+
+				//Update the vertex buffer if needed
+				resources->vertexBuffer.waitCompletion(vulkan);
+				/*if(geometry.useFrame(*frame)) {
+					//Buffer has changed
+					resources->vertexBuffer.flushData(
+						vulkan,
+						vulkan.getGraphicsQueueIndex(),
+						vk::AccessFlagBits::eVertexAttributeRead,
+						vk::PipelineStageFlagBits::eVertexInput
+					);
+				}*/
+
+				//Flush the unform buffer
+				resources->uniformBuffer.flush(vulkan);
+
+				//Configure the sampler for propper operation
+				configureSampler(*frame, filter, renderPass, blendingMode);
+				assert(frameDescriptorSetLayout);
+				assert(pipelineLayout);
+				assert(pipeline);
+				assert(*pipeline);
+
+				//Bind the pipeline and its descriptor sets
+				cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
+
+				cmd.bindVertexBuffers(
+					VERTEX_BUFFER_BINDING,											//Binding
+					resources->vertexBuffer.getBuffer(),							//Vertex buffers
+					0UL																//Offsets
 				);
-			}
 
-			//Flush the unform buffer
-			resources->uniformBuffer.flush(vulkan);
+				cmd.bindIndexBuffer(
+					resources->indexBuffer.getBuffer(),								//Index buffer
+					0,																//Offset
+					vk::IndexType::eUint16											//Index type
+				);
 
-			//Configure the sampler for propper operation
-			configureSampler(*frame, filter, renderPass, blendingMode);
-			assert(frameDescriptorSetLayout);
-			assert(pipelineLayout);
-			assert(pipeline);
-			assert(*pipeline);
+				cmd.bindDescriptorSets(
+					vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
+					pipelineLayout,													//Pipeline layout
+					DESCRIPTOR_SET_VIDEOSURFACE,									//First index
+					descriptorSet,													//Descriptor sets
+					{}																//Dynamic offsets
+				);
 
-			//Bind the pipeline and its descriptor sets
-			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
+				frame->bind(
+					cmd.get(), 														//Commandbuffer
+					pipelineLayout, 												//Pipeline layout
+					DESCRIPTOR_SET_FRAME, 											//Descriptor set index
+					filter															//Filter
+				);
 
-			cmd.bindVertexBuffers(
-				VERTEX_BUFFER_BINDING,											//Binding
-				resources->vertexBuffer.getBuffer(),							//Vertex buffers
-				0UL																//Offsets
-			);
+				//Draw the frame and finish recording
+				cmd.drawIndexed(
+					resources->indexBuffer.size() / sizeof(Index),					//Index count
+					1, 																//Instance count
+					0, 																//First index
+					0, 																//First vertex
+					0																//First instance
+				);
 
-			cmd.bindDescriptorSets(
-				vk::PipelineBindPoint::eGraphics,								//Pipeline bind point
-				pipelineLayout,													//Pipeline layout
-				DESCRIPTOR_SET_VIDEOSURFACE,									//First index
-				descriptorSet,													//Descriptor sets
-				{}																//Dynamic offsets
-			);
-
-			frame->bind(
-				cmd.get(), 														//Commandbuffer
-				pipelineLayout, 												//Pipeline layout
-				DESCRIPTOR_SET_FRAME, 											//Descriptor set index
-				filter															//Filter
-			);
-
-			//Draw the frame and finish recording
-			cmd.draw(
-				Graphics::Frame::Geometry::VERTEX_COUNT, 						//Vertex count
-				1, 																//Instance count
-				0, 																//First vertex
-				0																//First instance
-			);
-
-			//Add the dependencies to the command buffer
-			cmd.addDependencies({ resources, pipeline, frame });			
+				//Add the dependencies to the command buffer
+				cmd.addDependencies({ resources, pipeline, frame });
+			}		
 		}
 
 		void updateModelMatrixUniform(const Math::Transformf& transform) {
@@ -221,12 +249,253 @@ struct VideoSurfaceImpl {
 			}
 		}
 
+		void fillVertexBuffer(const BezierCrop::BezierLoop& loop) {
+			constexpr Index PRIMITIVE_RESTART_INDEX = ~Index(0);
+			//Obtain the vertices in the inner hull
+			std::vector<Math::Vec2f> innerHull;
+			for(size_t i = 0; i < loop.segmentCount(); ++i) {
+				const auto& segment = loop.getSegment(i);
 
-		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan) {
+				//First point will always be at the inner hull
+				innerHull.emplace_back(segment.front());
+
+				//Evaluate it for the 2 control points
+				for(size_t j = 1; j < segment.degree(); ++j) {
+					const auto signedDistance = Math::getSignedDistance(
+						Math::Line<float, 2>(segment.front(), segment.back()),
+						segment[j]
+					);
+
+					if(signedDistance < 0) {
+						//This segment lies on the inside
+						innerHull.emplace_back(segment[j]);
+					}
+				}
+			}
+
+			//Triangulate the vertices
+			std::vector<Index> indices = Math::triangulate<float, Index>(innerHull); //TODO: vertex to position
+			std::vector<Vertex> vertices = std::vector<Vertex>(innerHull.cbegin(), innerHull.cend());
+
+			//Add the outline vertices
+			for(size_t i = 0; i < loop.segmentCount(); ++i) {
+				const auto& segment = loop.getSegment(i);
+
+				//Based on:
+				//https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-25-rendering-vector-art-gpu
+				//Calculate the mixed product of the control points. Note that we're using
+				//a affine space (1.0f at the end of the vector)
+				const auto a1 = Math::det(Math::Mat3x3f( //b0.(b3 x b2)
+					Zuazo::Math::Vec3f(segment[0], 1.0f), 
+					Zuazo::Math::Vec3f(segment[3], 1.0f), 
+					Zuazo::Math::Vec3f(segment[2], 1.0f)
+				)); 
+				const auto a2 = Math::det(Math::Mat3x3f( //b1.(b0 x b3)
+					Zuazo::Math::Vec3f(segment[1], 1.0f), 
+					Zuazo::Math::Vec3f(segment[0], 1.0f), 
+					Zuazo::Math::Vec3f(segment[3], 1.0f)
+				)); 
+				const auto a3 = Math::det(Math::Mat3x3f( //b2.(b1 x b0)
+					Zuazo::Math::Vec3f(segment[2], 1.0f), 
+					Zuazo::Math::Vec3f(segment[1], 1.0f), 
+					Zuazo::Math::Vec3f(segment[0], 1.0f)
+				)); 
+
+				const auto d1 = a1 - 2*a2 + 3*a3;
+				const auto d2 = -a2 + 3*a3; //Maybe -2*?
+				const auto d3 = 3*a3;
+
+				//Optimize away lines. They are already defined by the inner hull
+				constexpr auto LINE_BIAS = 1e-6;
+				if(Math::abs(d1)>LINE_BIAS || Math::abs(d2)>LINE_BIAS || Math::abs(d3)>LINE_BIAS) {
+					std::array<Zuazo::Math::Vec3f, segment.size()> klmCoords;
+					bool reverse = false;
+					constexpr Math::Vec3f REVERSE_COEFF(-1, -1, +1);
+
+					//Optimize away quadratic curves
+					if(Math::abs(d1)>LINE_BIAS || Math::abs(d2)>LINE_BIAS) {
+						//This is a cubic curve. Decide the type based on the discriminator
+						const auto disc = d1*d1*(3*d2*d2 - 4*d1*d3); //d1^2(3d2^2 - 4d1d3)
+
+						if(Math::abs(disc)<LINE_BIAS && Math::abs(d2)>LINE_BIAS) {
+							//Special case of a cusp where d2 != 0
+							const Math::Vec2f L(d3, 3*d2); //M=L
+							const auto smt = L.x - L.y;
+
+							klmCoords = {
+								Math::Vec3f(
+									L.x,											//ls, 
+									L.x*L.x*L.x,									//ls^3
+									1.0f											//1
+								),
+								Math::Vec3f(
+									L.x - 1*L.y/3,									//ls - 1/3*lt
+									L.x*L.x*smt,									//ls^2*(ls-lt)
+									1.0f											//1
+								), 
+								Math::Vec3f(
+									L.x - 2*L.y/3,									//ls - 2/3*lt
+									L.x*smt*smt,									//ls*(ls-lt)^2
+									1.0f											//1
+								),	
+								Math::Vec3f(
+									smt,											//ls-lt	
+									smt*smt*smt,									//(ls-lt)^3
+									1.0f											//1
+								) 
+							};
+							reverse = false; //Never reverses
+
+						} else if(disc >= 0) {
+							//Serpentine
+							const auto sqrtDisc = Math::sqrt(9*d2*d2 - 12*d1*d3); //Ensured to be real, as disc>=3
+							const Math::Vec2f L(3*d2 - sqrtDisc, 6*d1);
+							const Math::Vec2f M(3*d2 + sqrtDisc, 6*d1);
+							const auto Lsmt = L.x - L.y;
+							const auto Msmt = M.x - M.y;
+
+							klmCoords = {
+								Math::Vec3f(
+									L.x*M.x,										//ls*ms, 			
+									L.x*L.x*L.x,									//ls^3
+									M.x*M.x*M.x										//ms^3
+								), 
+								Math::Vec3f(
+									(3*L.x*M.x - L.x*M.y - L.y*M.x)/3, 				//ls*ms - 1/3*ls*mt - 1/3*lt*ms
+									L.x*L.x*Lsmt,									//ls^2*(ls-lt) 
+									M.x*M.x*Msmt									//ms^2*(ms-mt)
+								), 			
+								Math::Vec3f(
+									(3*L.x*M.x - 2*L.x*M.y - 2*L.y*M.x + L.y*M.y)/3,//ls*ms - 2/3*ls*mt - 2/3*lt*ms - 1/3*lt*mt
+									L.x*Lsmt*Lsmt, 									//ls*(ls-lt)^2
+									M.x*Msmt*Msmt									//ms*(ms-mt)^2
+								), 
+								Math::Vec3f(
+									Lsmt*Msmt, 										//(ls-lt)*(ms-mt)
+									Lsmt*Lsmt*Lsmt, 								//(ls-lt)^3
+									Msmt*Msmt*Msmt									//(ms-mt)^3
+								)
+							};
+							reverse = d1 < 0;
+
+						} else {
+							//Loop
+							const auto sqrtDisc = Math::sqrt(4*d1*d3 - 3*d2*d2); //Ensured to be real, as disc<0
+							const Math::Vec2f L(d2 - sqrtDisc, 2*d1);
+							const Math::Vec2f M(d2 + sqrtDisc, 2*d1);
+							const auto Lsmt = L.x - L.y;
+							const auto Msmt = M.x - M.y;
+
+							//TODO check if double point
+							klmCoords = {
+								Math::Vec3f(
+									L.x*M.x,										//ls*ms
+									L.x*L.x*M.x,									//ls^2*ms
+									L.x*M.x*M.x										//ls*ms^2
+								),		 			
+								Math::Vec3f(
+									(L.x*M.x - L.x*M.y - L.y*M.x)/3,				//1/3*ls*ms - 1/3*ls*mt - 1/3*lt*ms
+									(3*L.x*L.x*M.x - 2*L.x*L.y*M.x - L.x*L.x*M.y)/3,//ls^2*ms - 2/3*ls*lt*ms - 1/3*ls^2*mt
+									(3*L.x*M.x*M.x - 2*L.x*M.x*M.y - L.y*M.x*M.x)/3	//ls*ms^2 - 2/3*ls*ms*mt - 1/3*lt*ms^2
+								), 
+								Math::Vec3f(
+									(3*L.x*M.x - 2*L.x*M.y - 2*L.y*M.x + L.y*M.y)/3,//ls*ms - 2/3*ls*mt - 2/3*lt*ms + 1/3*lt*mt
+									Lsmt*(3*L.x*M.x - 2*L.x*M.y - L.y*M.x)/3, 		//(ls-lt)*(ls*ms - 2/3*ls*mt - 1/3*lt*ms)
+									Msmt*(3*L.x*M.x - 2*L.y*M.x - L.x*M.y)/3 		//(ms-mt)*(ls*ms - 2/3*lt*ms - 1/3*ls*mt)
+								),
+								Math::Vec3f(
+									Lsmt*Msmt,										//(ls-lt)*(ms-mt) 
+									Lsmt*Lsmt*Msmt,									//(ls-lt)^2*(ms-mt) 
+									Lsmt*Msmt*Msmt									//(ls-lt)*(ms-mt)^2
+								)
+							};
+							reverse = Math::sign(klmCoords[1].x) != Math::sign(d1);
+						}
+
+					} else {
+						//This is a quadratic curve
+						//All quadratic curves share the same klm values
+						klmCoords = {
+							Zuazo::Math::Vec3f(0.0f, 		0.0f, 		0.0f		),
+							Zuazo::Math::Vec3f(1.0f/3.0f, 	0.0f, 		1.0f/3.0f	),
+							Zuazo::Math::Vec3f(2.0f/3.0f, 	1.0f/3.0f, 	2.0f/3.0f	),
+							Zuazo::Math::Vec3f(1.0f, 		1.0f, 		1.0f		)
+						};
+						reverse = d3 < 0;
+					}
+
+					//Something is going to be drawn, reset the primitive assembly
+					indices.emplace_back(PRIMITIVE_RESTART_INDEX);
+
+					constexpr std::array<size_t, segment.size()> TRIANGLE_STRIP_MAPPING = {0, 1, 3, 2};
+
+					//Create the vertices and its corresponding indices
+					static_assert(segment.size() == klmCoords.size(), "Sizes must match");
+					static_assert(segment.size() == TRIANGLE_STRIP_MAPPING.size(), "Sizes must match");
+					for(size_t j = 0; j < segment.size(); ++j) {
+						//Simply refer to the following vertex
+						indices.emplace_back(vertices.size()); 
+
+						//Obtain the components of the vertex and add them to the vertex list
+						const auto index = TRIANGLE_STRIP_MAPPING[j];
+						const auto& position = segment[index];
+						const auto& klmCoord = klmCoords[index];
+						std::cout << klmCoord << (j==3 ? "\n" : " ");
+						vertices.emplace_back(
+							position, 
+							Zuazo::Math::Vec2f(), 
+							reverse ? REVERSE_COEFF*klmCoord : klmCoord
+						);
+					}
+				}
+			}
+
+			if(vertices.size() >= std::numeric_limits<Index>::max()) {
+				//Could be removed by increasing to 32bit indices
+				throw Exception("Too many vertices for the index precision");
+			}
+
+			//Copy the data to the buffers
+			assert(resources);
+			if(resources->vertexBuffer.size() != vertices.size()*sizeof(Vertex)) {
+				resources->vertexBuffer = createVertexBuffer(vulkan, vertices.size());
+			}
+			assert(resources->vertexBuffer.size() == vertices.size()*sizeof(Vertex));
+			std::memcpy(resources->vertexBuffer.data(), vertices.data(), vertices.size()*sizeof(Vertex));
+			resources->vertexBuffer.flushData(
+				vulkan, 
+				vulkan.getTransferQueueIndex(), 
+				vk::AccessFlagBits::eVertexAttributeRead,
+				vk::PipelineStageFlagBits::eVertexInput
+			); //TODO force flushing
+
+			if(resources->indexBuffer.size() != indices.size()*sizeof(Index)) {
+				resources->indexBuffer = createIndexBuffer(vulkan, indices.size());
+			}
+			assert(resources->indexBuffer.size() == indices.size()*sizeof(Index));
+			std::memcpy(resources->indexBuffer.data(), indices.data(), indices.size()*sizeof(Index));
+			resources->indexBuffer.flushData(
+				vulkan, 
+				vulkan.getTransferQueueIndex(), 
+				vk::AccessFlagBits::eIndexRead,
+				vk::PipelineStageFlagBits::eVertexInput
+			);
+		}
+
+
+		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan, size_t vertexCount) {
 			return Graphics::StagedBuffer(
 				vulkan,
 				vk::BufferUsageFlagBits::eVertexBuffer,
-				sizeof(Vertex) * Graphics::Frame::Geometry::VERTEX_COUNT
+				sizeof(Vertex) * vertexCount
+			);
+		}
+
+		static Graphics::StagedBuffer createIndexBuffer(const Graphics::Vulkan& vulkan, size_t indexCount) {
+			return Graphics::StagedBuffer(
+				vulkan,
+				vk::BufferUsageFlagBits::eIndexBuffer,
+				sizeof(Index) * indexCount
 			);
 		}
 
@@ -334,23 +603,23 @@ struct VideoSurfaceImpl {
 													BlendingMode blendingMode )
 		{
 			static //So that its ptr can be used as an identifier
-			#include <video_surface_vert.h>
-			const size_t vertId = reinterpret_cast<uintptr_t>(video_surface_vert);
+			#include <bezier_crop_vert.h>
+			const size_t vertId = reinterpret_cast<uintptr_t>(bezier_crop_vert);
 			static
-			#include <video_surface_frag.h>
-			const size_t fragId = reinterpret_cast<uintptr_t>(video_surface_frag);
+			#include <bezier_crop_frag.h>
+			const size_t fragId = reinterpret_cast<uintptr_t>(bezier_crop_frag);
 
 			//Try to retrive modules from cache
 			auto vertexShader = vulkan.createShaderModule(vertId);
 			if(!vertexShader) {
 				//Modules isn't in cache. Create it
-				vertexShader = vulkan.createShaderModule(vertId, video_surface_vert);
+				vertexShader = vulkan.createShaderModule(vertId, bezier_crop_vert);
 			}
 
 			auto fragmentShader = vulkan.createShaderModule(fragId);
 			if(!fragmentShader) {
 				//Modules isn't in cache. Create it
-				fragmentShader = vulkan.createShaderModule(fragId, video_surface_frag);
+				fragmentShader = vulkan.createShaderModule(fragId, bezier_crop_frag);
 			}
 
 			assert(vertexShader);
@@ -390,6 +659,12 @@ struct VideoSurfaceImpl {
 					VERTEX_BUFFER_BINDING,
 					vk::Format::eR32G32Sfloat,
 					offsetof(Vertex, texCoord)
+				),
+				vk::VertexInputAttributeDescription(
+					VERTEX_LOCATION_KLM,
+					VERTEX_BUFFER_BINDING,
+					vk::Format::eR32G32Sfloat,
+					offsetof(Vertex, klm)
 				)
 			};
 
@@ -402,7 +677,7 @@ struct VideoSurfaceImpl {
 			constexpr vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
 				{},													//Flags
 				vk::PrimitiveTopology::eTriangleStrip,				//Topology
-				false												//Restart enable
+				true												//Restart enable
 			);
 
 			constexpr vk::PipelineViewportStateCreateInfo viewport(
@@ -487,38 +762,38 @@ struct VideoSurfaceImpl {
 	using Input = Signal::Input<Video>;
 	using LastFrames = std::unordered_map<const RendererBase*, Video>;
 
-	std::reference_wrapper<VideoSurface>	owner;
+	std::reference_wrapper<BezierCrop>		owner;
 
 	Input									videoIn;
 
-	Math::Vec2f								size;
+	BezierCrop::BezierLoop					shape;
 
 	std::unique_ptr<Open>					opened;
 	LastFrames								lastFrames;
 	
 
-	VideoSurfaceImpl(VideoSurface& owner, Math::Vec2f size)
+	BezierCropImpl(BezierCrop& owner, BezierCrop::BezierLoop shape)
 		: owner(owner)
 		, videoIn()
-		, size(size)
+		, shape(std::move(shape))
 	{
 	}
 
-	~VideoSurfaceImpl() = default;
+	~BezierCropImpl() = default;
 
 	void moved(ZuazoBase& base) {
-		owner = static_cast<VideoSurface&>(base);
+		owner = static_cast<BezierCrop&>(base);
 	}
 
 	void open(ZuazoBase& base) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface);
 		assert(!opened);
 
 		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
 			opened = Utils::makeUnique<Open>(
 					videoSurface.getInstance().getVulkan(),
-					getSize(),
+					getShape(),
 					videoSurface.getScalingMode(),
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
@@ -529,7 +804,7 @@ struct VideoSurfaceImpl {
 	}
 
 	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface);
 		assert(!opened);
 		assert(lock.owns_lock());
@@ -538,7 +813,7 @@ struct VideoSurfaceImpl {
 			lock.unlock();
 			auto newOpened = Utils::makeUnique<Open>(
 					videoSurface.getInstance().getVulkan(),
-					getSize(),
+					getShape(),
 					videoSurface.getScalingMode(),
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
@@ -554,7 +829,7 @@ struct VideoSurfaceImpl {
 
 
 	void close(ZuazoBase& base) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		
 		videoIn.reset();
@@ -565,7 +840,7 @@ struct VideoSurfaceImpl {
 	}
 
 	void asyncClose(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		assert(lock.owns_lock());
 		
@@ -584,7 +859,7 @@ struct VideoSurfaceImpl {
 	}
 
 	bool hasChangedCallback(const LayerBase& base, const RendererBase& renderer) const {
-		const auto& videoSurface = static_cast<const VideoSurface&>(base);
+		const auto& videoSurface = static_cast<const BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		const auto ite = lastFrames.find(&renderer);
@@ -608,7 +883,7 @@ struct VideoSurfaceImpl {
 	}
 
 	void drawCallback(const LayerBase& base, const RendererBase& renderer, Graphics::CommandBuffer& cmd) {
-		const auto& videoSurface = static_cast<const VideoSurface&>(base);
+		const auto& videoSurface = static_cast<const BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		if(opened) {
@@ -631,7 +906,7 @@ struct VideoSurfaceImpl {
 	}
 
 	void transformCallback(LayerBase& base, const Math::Transformf& transform) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		if(opened) {
@@ -642,7 +917,7 @@ struct VideoSurfaceImpl {
 	}
 
 	void opacityCallback(LayerBase& base, float opa) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		if(opened) {
@@ -653,58 +928,48 @@ struct VideoSurfaceImpl {
 	}
 
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode);
 	}
 
 	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode());
 	}
 
 	void scalingModeCallback(VideoScalerBase& base, ScalingMode mode) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
-		if(opened) {
-			opened->geometry.setScalingMode(mode);
-		}
+		//TODO
 
 		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 	void scalingFilterCallback(VideoScalerBase& base, ScalingFilter) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
+		auto& videoSurface = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
 		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
 
-	void setSize(Math::Vec2f s) {
-		if(size != s) {
-			size = s;
-
-			if(opened) {
-				opened->geometry.setTargetSize(s);
-			}
-
-			lastFrames.clear(); //Will force hasChanged() to true
-		}
+	void setShape(BezierCrop::BezierLoop shape) {
+		this->shape = std::move(shape);
 	}
 
-	Math::Vec2f getSize() const {
-		return size;
+	const BezierCrop::BezierLoop& getShape() const {
+		return shape;
 	}
 
 private:
-	void recreateCallback(	VideoSurface& videoSurface, 
+	void recreateCallback(	BezierCrop& bezierCrop, 
 							Graphics::RenderPass renderPass,
 							BlendingMode blendingMode )
 	{
-		assert(&owner.get() == &videoSurface);
+		assert(&owner.get() == &bezierCrop);
 
-		if(videoSurface.isOpen()) {
+		if(bezierCrop.isOpen()) {
 			const bool isValid = 	renderPass != Graphics::RenderPass() &&
 									blendingMode > BlendingMode::NONE ;
 
@@ -721,11 +986,11 @@ private:
 			} else if(!opened && isValid) {
 				//It has become valid
 				opened = Utils::makeUnique<Open>(
-					videoSurface.getInstance().getVulkan(),
-					getSize(),
-					videoSurface.getScalingMode(),
-					videoSurface.getTransform(),
-					videoSurface.getOpacity()
+					bezierCrop.getInstance().getVulkan(),
+					getShape(),
+					bezierCrop.getScalingMode(),
+					bezierCrop.getTransform(),
+					bezierCrop.getOpacity()
 				);
 			}
 
@@ -738,48 +1003,48 @@ private:
 
 
 
-VideoSurface::VideoSurface(	Instance& instance,
-							std::string name,
-							const RendererBase* renderer,
-							Math::Vec2f size )
-	: Utils::Pimpl<VideoSurfaceImpl>({}, *this, size)
+BezierCrop::BezierCrop(	Instance& instance,
+						std::string name,
+						const RendererBase* renderer,
+						BezierLoop shape )
+	: Utils::Pimpl<BezierCropImpl>({}, *this, std::move(shape))
 	, ZuazoBase(
 		instance, 
 		std::move(name),
 		{ PadRef((*this)->videoIn) },
-		std::bind(&VideoSurfaceImpl::moved, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::open, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
+		std::bind(&BezierCropImpl::moved, std::ref(**this), std::placeholders::_1),
+		std::bind(&BezierCropImpl::open, std::ref(**this), std::placeholders::_1),
+		std::bind(&BezierCropImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::close, std::ref(**this), std::placeholders::_1),
+		std::bind(&BezierCropImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
 		renderer,
-		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
-		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
+		std::bind(&BezierCropImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+		std::bind(&BezierCropImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, VideoScalerBase(
-		std::bind(&VideoSurfaceImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::scalingFilterCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
+		std::bind(&BezierCropImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::scalingFilterCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, Signal::ConsumerLayout<Video>(makeProxy((*this)->videoIn))
 {
 }
 
-VideoSurface::VideoSurface(VideoSurface&& other) = default;
+BezierCrop::BezierCrop(BezierCrop&& other) = default;
 
-VideoSurface::~VideoSurface() = default;
+BezierCrop::~BezierCrop() = default;
 
-VideoSurface& VideoSurface::operator=(VideoSurface&& other) = default;
+BezierCrop& BezierCrop::operator=(BezierCrop&& other) = default;
 
 
-void VideoSurface::setSize(Math::Vec2f size) {
-	(*this)->setSize(size);
+void BezierCrop::setShape(BezierLoop shape) {
+	(*this)->setShape(std::move(shape));
 }
 
-Math::Vec2f VideoSurface::getSize() const {
-	return (*this)->getSize();
+const BezierCrop::BezierLoop& BezierCrop::getShape() const {
+	return (*this)->getShape();
 }
 
 }
