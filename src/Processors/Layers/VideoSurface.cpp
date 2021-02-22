@@ -92,7 +92,7 @@ struct VideoSurfaceImpl {
 			, resources(Utils::makeShared<Resources>(	createVertexBuffer(vulkan),
 														createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
-			, geometry(resources->vertexBuffer.data(), sizeof(Vertex), offsetof(Vertex, position), offsetof(Vertex, texCoord), scalingMode, size)
+			, geometry(scalingMode, size)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
 			, frameDescriptorSetLayout()
 			, pipelineLayout()
@@ -124,9 +124,19 @@ struct VideoSurfaceImpl {
 			assert(frame);
 
 			//Update the vertex buffer if needed
-			resources->vertexBuffer.waitCompletion(vulkan);
 			if(geometry.useFrame(*frame)) {
-				//Buffer has changed
+				//Size has changed
+				resources->vertexBuffer.waitCompletion(vulkan);
+
+				//Write the new data
+				geometry.writeQuadVertices(
+					reinterpret_cast<Math::Vec2f*>(resources->vertexBuffer.data() + offsetof(Vertex, position)),
+					reinterpret_cast<Math::Vec2f*>(resources->vertexBuffer.data() + offsetof(Vertex, texCoord)),
+					sizeof(Vertex),
+					sizeof(Vertex)
+				);
+
+				//Flush the buffer
 				resources->vertexBuffer.flushData(
 					vulkan,
 					vulkan.getGraphicsQueueIndex(),
@@ -681,12 +691,12 @@ struct VideoSurfaceImpl {
 	}
 
 
-	void setSize(Math::Vec2f s) {
-		if(size != s) {
-			size = s;
+	void setSize(Math::Vec2f size) {
+		if(this->size != size) {
+			this->size = size;
 
 			if(opened) {
-				opened->geometry.setTargetSize(s);
+				opened->geometry.setTargetSize(this->size);
 			}
 
 			lastFrames.clear(); //Will force hasChanged() to true

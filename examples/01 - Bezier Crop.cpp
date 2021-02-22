@@ -66,28 +66,35 @@ int main(int argc, const char* argv[]) {
 	window.setResizeable(false); //Disable resizeing, as extra care needs to be taken
 	window.asyncOpen(lock);
 
-	//Bezier curve:
-	constexpr std::array POINTS = {
-		Zuazo::Math::Vec2f(0,0),
-		Zuazo::Math::Vec2f(-15,-30),
-		Zuazo::Math::Vec2f(-40,-30),
-		Zuazo::Math::Vec2f(-40,-5),
-		Zuazo::Math::Vec2f(-40,25),
-		Zuazo::Math::Vec2f(-10,50),
-		Zuazo::Math::Vec2f(0,50),
-		Zuazo::Math::Vec2f(10,50),
-		Zuazo::Math::Vec2f(40,25),
-		Zuazo::Math::Vec2f(40,-5),
-		Zuazo::Math::Vec2f(40,-30),
-		Zuazo::Math::Vec2f(15,-30)
+	//Bezier curve: (<3)
+	const std::array POINTS = {
+		5.0f*Zuazo::Math::Vec2f(0,0),
+		5.0f*Zuazo::Math::Vec2f(-15,-30),
+		5.0f*Zuazo::Math::Vec2f(-40,-30),
+		5.0f*Zuazo::Math::Vec2f(-40,-5),
+		5.0f*Zuazo::Math::Vec2f(-40,25),
+		5.0f*Zuazo::Math::Vec2f(-10,50),
+		5.0f*Zuazo::Math::Vec2f(0,50),
+		5.0f*Zuazo::Math::Vec2f(10,50),
+		5.0f*Zuazo::Math::Vec2f(40,25),
+		5.0f*Zuazo::Math::Vec2f(40,-5),
+		5.0f*Zuazo::Math::Vec2f(40,-30),
+		5.0f*Zuazo::Math::Vec2f(15,-30)
 	};
+
+	const auto loop = Zuazo::Math::CubicBezierLoop<Zuazo::Math::Vec2f>(
+		Zuazo::Utils::BufferView<const Zuazo::Math::Vec2f>(POINTS)
+	);
+
+	const auto loopBoundaries = Zuazo::Math::getBoundaries(loop);
 
 	//Create a layer for rendering to the window
 	Zuazo::Processors::Layers::BezierCrop bezierCrop(
 		instance,
 		"Video Surface",
 		&window,
-		Zuazo::Math::BezierLoop<Zuazo::Math::Vec2f, 3>(Zuazo::Utils::BufferView<const Zuazo::Math::Vec2f>(POINTS))
+		loopBoundaries.getMax() - loopBoundaries.getMin(),
+		loop
 	);
 
 	window.setLayers({bezierCrop});

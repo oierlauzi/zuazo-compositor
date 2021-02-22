@@ -26,7 +26,8 @@ public:
 	BezierCrop(	Instance& instance,
 				std::string name,
 				const RendererBase* renderer,
-				BezierLoop shape );
+				Math::Vec2f size,
+				BezierLoop crop );
 	BezierCrop(const BezierCrop& other) = delete;
 	BezierCrop(BezierCrop&& other);
 	virtual ~BezierCrop();
@@ -34,8 +35,11 @@ public:
 	BezierCrop&								operator=(const BezierCrop& other) = delete;
 	BezierCrop&								operator=(BezierCrop&& other);
 
-	void									setShape(BezierLoop shape);
-	const BezierLoop&						getShape() const;
+	void									setSize(Math::Vec2f size);
+	Math::Vec2f								getSize() const;
+
+	void									setCrop(BezierLoop crop);
+	const BezierLoop&						getCrop() const;
 
 };
 
