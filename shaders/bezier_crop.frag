@@ -19,28 +19,44 @@ layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
 
 layout(set = 1, binding = 1) uniform LayerDataBlock {
 	float opacity;
+	float lineWidth;
 };
 
 //Frame descriptor set
 frame_descriptor_set(2)
 
 void main() {
-	//Sample the color from the frame
-	vec4 color = frame_texture(2, in_texCoord);
-
-	//Perform colorspace conversion
-	color = ct_transferColor(frame_color_transfer(2), outColorTransfer, color);
+	const vec4 lineColor = vec4(1.0f, 0.0f, 0.0f, 1.0f); //TODO UBO
 
 	//Obtain th signed distance to the curve
 	const float sDist = bezier3_signed_distance(in_klm);
 
-	//Apply the opacity and bezier alpha to it
-	color.a *= opacity * clamp(0.5f - sDist, 0.0f, 1.0f);
+	//Obtain the line factor and the edge factor from the distance
+	const float lineFactor = clamp(0.5f - sDist - lineWidth, 0.0f, 1.0f);
+	const float edgeFactor = clamp(0.5f - sDist, 0.0f, 1.0f);
 
-	if(color.a <= 0.0f) {
+	//Calculate if it is wihin the line
+	if(lineFactor<=0.0f) {
+		//Avoid sampling the texture, as it is tedious
+		out_color = lineColor;
+	} else {
+		//Sample the color from the frame
+		out_color = frame_texture(2, in_texCoord);
+
+		//Perform colorspace conversion
+		out_color = ct_transferColor(frame_color_transfer(2), outColorTransfer, out_color);
+
+		//Apply the line color if necessary
+		out_color = mix(lineColor, out_color, lineFactor);
+	}
+
+	//Apply the opacity and bezier alpha to it
+	out_color.a *= opacity * edgeFactor;
+
+	if(out_color.a <= 0.0f) {
 		discard;
 	} else {
-		out_color = ct_premultiply_alpha(color);
+		out_color = ct_premultiply_alpha(out_color);
 	}
 }
  

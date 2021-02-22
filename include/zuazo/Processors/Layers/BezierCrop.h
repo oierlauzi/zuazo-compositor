@@ -41,6 +41,9 @@ public:
 	void									setCrop(BezierLoop crop);
 	const BezierLoop&						getCrop() const;
 
+	void									setLineWidth(float width);
+	float									getLineWidth() const;
+
 };
 
 }

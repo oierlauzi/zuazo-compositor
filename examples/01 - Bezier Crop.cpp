@@ -100,6 +100,7 @@ int main(int argc, const char* argv[]) {
 	window.setLayers({bezierCrop});
 	bezierCrop.setScalingMode(Zuazo::ScalingMode::BOXED);
 	bezierCrop.setScalingFilter(Zuazo::ScalingFilter::NEAREST);
+	bezierCrop.setLineWidth(2.0f);
 	bezierCrop.asyncOpen(lock);
 
 	//Create a video source

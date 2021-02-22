@@ -65,12 +65,14 @@ struct BezierCropImpl {
 
 		enum LayerDataUniforms {
 			LAYERDATA_UNIFORM_OPACITY,
+			LAYERDATA_UNIFORM_LINEWIDTH,
 
 			LAYERDATA_UNIFORM_COUNT
 		};
 
 		static constexpr std::array<Utils::Area, LAYERDATA_UNIFORM_COUNT> LAYERDATA_UNIFORM_LAYOUT = {
-			Utils::Area(0, 	sizeof(float)  	)	//LAYERDATA_UNIFORM_OPACITY
+			Utils::Area(0, 				sizeof(float)  	),	//LAYERDATA_UNIFORM_OPACITY
+			Utils::Area(sizeof(float), 	sizeof(float)  	)	//LAYERDATA_UNIFORM_LINEWIDTH
 		};
 
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
@@ -115,7 +117,8 @@ struct BezierCropImpl {
 				ScalingMode scalingMode,
 				const BezierCrop::BezierLoop& crop,
 				const Math::Transformf& transform,
-				float opacity ) 
+				float opacity,
+				float lineWidth ) 
 			: vulkan(vulkan)
 			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
@@ -131,6 +134,7 @@ struct BezierCropImpl {
 			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 			updateModelMatrixUniform(transform);
 			updateOpacityUniform(opacity);
+			updateLineWidthUniform(lineWidth);
 			fillVertexBufferPosition(crop);
 		}
 
@@ -244,6 +248,19 @@ struct BezierCropImpl {
 				&opa,
 				sizeof(opa),
 				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].offset()
+			);
+		}
+
+		void updateLineWidthUniform(float lineWidth) {
+			assert(resources);
+			resources->uniformBuffer.waitCompletion(vulkan);			
+
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_LAYERDATA,
+				&lineWidth,
+				sizeof(lineWidth),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_LINEWIDTH].offset()
 			);
 		}
 
@@ -722,6 +739,7 @@ struct BezierCropImpl {
 
 	Math::Vec2f								size;
 	BezierCrop::BezierLoop					crop;
+	float									lineWidth;
 
 	std::unique_ptr<Open>					opened;
 	LastFrames								lastFrames;
@@ -755,7 +773,8 @@ struct BezierCropImpl {
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity()
+					bezierCrop.getOpacity(),
+					bezierCrop.getLineWidth()
 			);
 		}
 
@@ -776,7 +795,8 @@ struct BezierCropImpl {
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity()
+					bezierCrop.getOpacity(),
+					bezierCrop.getLineWidth()
 			);
 			lock.lock();
 
@@ -942,6 +962,22 @@ struct BezierCropImpl {
 		return crop;
 	}
 
+	void setLineWidth(float lineWidth) {
+		if(this->lineWidth != lineWidth) {
+			this->lineWidth = lineWidth;
+
+			if(opened) {
+				opened->updateLineWidthUniform(this->lineWidth);
+			}
+
+			lastFrames.clear(); //Will force hasChanged() to true
+		}
+	}
+
+	float getLineWidth() const {
+		return lineWidth;
+	}
+	
 private:
 	void recreateCallback(	BezierCrop& bezierCrop, 
 							Graphics::RenderPass renderPass,
@@ -971,7 +1007,8 @@ private:
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity()
+					bezierCrop.getOpacity(),
+					bezierCrop.getLineWidth()
 				);
 			}
 
@@ -1036,6 +1073,15 @@ void BezierCrop::setCrop(BezierLoop shape) {
 
 const BezierCrop::BezierLoop& BezierCrop::getCrop() const {
 	return (*this)->getCrop();
+}
+
+
+void BezierCrop::setLineWidth(float width) {
+	(*this)->setLineWidth(std::move(width));
+}
+
+float BezierCrop::getLineWidth() const {
+	return (*this)->getLineWidth();
 }
 
 }
