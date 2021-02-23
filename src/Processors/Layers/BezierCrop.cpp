@@ -64,15 +64,17 @@ struct BezierCropImpl {
 		};
 
 		enum LayerDataUniforms {
-			LAYERDATA_UNIFORM_OPACITY,
+			LAYERDATA_UNIFORM_LINECOLOR,
 			LAYERDATA_UNIFORM_LINEWIDTH,
+			LAYERDATA_UNIFORM_OPACITY,
 
 			LAYERDATA_UNIFORM_COUNT
 		};
 
 		static constexpr std::array<Utils::Area, LAYERDATA_UNIFORM_COUNT> LAYERDATA_UNIFORM_LAYOUT = {
-			Utils::Area(0, 				sizeof(float)  	),	//LAYERDATA_UNIFORM_OPACITY
-			Utils::Area(sizeof(float), 	sizeof(float)  	)	//LAYERDATA_UNIFORM_LINEWIDTH
+			Utils::Area(0,									sizeof(Math::Vec4f) ),	//LAYERDATA_UNIFORM_LINECOLOR
+			Utils::Area(sizeof(Math::Vec4f),				sizeof(float)  		),	//LAYERDATA_UNIFORM_LINEWIDTH
+			Utils::Area(sizeof(Math::Vec4f)+sizeof(float), 	sizeof(float)  		)	//LAYERDATA_UNIFORM_OPACITY
 		};
 
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
@@ -117,8 +119,9 @@ struct BezierCropImpl {
 				ScalingMode scalingMode,
 				const BezierCrop::BezierLoop& crop,
 				const Math::Transformf& transform,
-				float opacity,
-				float lineWidth ) 
+				const Math::Vec4f& lineColor,
+				float lineWidth,
+				float opacity ) 
 			: vulkan(vulkan)
 			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
@@ -133,8 +136,9 @@ struct BezierCropImpl {
 		{
 			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
 			updateModelMatrixUniform(transform);
-			updateOpacityUniform(opacity);
+			updateLineColorUniform(lineColor);
 			updateLineWidthUniform(lineWidth);
+			updateOpacityUniform(opacity);
 			fillVertexBufferPosition(crop);
 		}
 
@@ -238,16 +242,16 @@ struct BezierCropImpl {
 			);
 		}
 
-		void updateOpacityUniform(float opa) {
+		void updateLineColorUniform(const Math::Vec4f& color) {
 			assert(resources);
 			resources->uniformBuffer.waitCompletion(vulkan);			
 
 			resources->uniformBuffer.write(
 				vulkan,
 				DESCRIPTOR_BINDING_LAYERDATA,
-				&opa,
-				sizeof(opa),
-				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].offset()
+				&color,
+				sizeof(color),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_LINECOLOR].offset()
 			);
 		}
 
@@ -261,6 +265,19 @@ struct BezierCropImpl {
 				&lineWidth,
 				sizeof(lineWidth),
 				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_LINEWIDTH].offset()
+			);
+		}
+
+		void updateOpacityUniform(float opa) {
+			assert(resources);
+			resources->uniformBuffer.waitCompletion(vulkan);			
+
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_LAYERDATA,
+				&opa,
+				sizeof(opa),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_OPACITY].offset()
 			);
 		}
 
@@ -278,24 +295,35 @@ struct BezierCropImpl {
 			}
 		}
 
-		void fillVertexBufferPosition(const BezierCrop::BezierLoop& loop) {
+		void fillVertexBufferPosition(const BezierCrop::BezierLoop& l) {
 			constexpr Index PRIMITIVE_RESTART_INDEX = ~Index(0);
+
+			BezierCrop::BezierLoop loop = l; //TODO avoid allocation
+
+			//Ensure that the loop is defined counter clock-wise
+			const auto loopBuffer = Utils::BufferView<const Math::Vec2f>(
+				loop.cbegin(), loop.cend()
+			);
+			if(Math::getSignedArea(loopBuffer) > 0) {
+				//Loop is clock-wise, reverse it
+				loop.reverse();
+			}
+			assert(Math::getSignedArea(loopBuffer) <= 0);
+
 			//Obtain the vertices in the inner hull
-			std::vector<Math::Vec2f> innerHull;
-			for(size_t i = 0; i < loop.segmentCount(); ++i) {
+			std::vector<Math::Vec2f> innerHull; //TODO avoid allocation
+			for(size_t i = 0; i < loop.getSegmentCount(); ++i) {
 				const auto& segment = loop.getSegment(i);
+				const auto segmentAxis = Zuazo::Math::Line<float, 2>(segment.front(), segment.back());
 
 				//First point will always be at the inner hull
 				innerHull.emplace_back(segment.front());
 
 				//Evaluate it for the 2 control points
 				for(size_t j = 1; j < segment.degree(); ++j) {
-					const auto signedDistance = Math::getSignedDistance(
-						Math::Line<float, 2>(segment.front(), segment.back()),
-						segment[j]
-					);
-
-					if(signedDistance < 0) {
+					const auto sDist = Math::getSignedDistance(segmentAxis, segment[j]);
+		
+					if(sDist < 0) {
 						//This segment lies on the inside
 						innerHull.emplace_back(segment[j]);
 					}
@@ -312,8 +340,9 @@ struct BezierCropImpl {
 			//Add the outline vertices
 			const BlinnLoop::Classifier<float> curveClassifier;
 			const BlinnLoop::KLMCalculator<float> klmCoordCalculator;
-			for(size_t i = 0; i < loop.segmentCount(); ++i) {
+			for(size_t i = 0; i < loop.getSegmentCount(); ++i) {
 				const auto& segment = loop.getSegment(i);
+				const auto segmentAxis = Zuazo::Math::Line<float, 2>(segment.front(), segment.back());
 				const auto classification = curveClassifier(segment);
 				const auto klmCoords = klmCoordCalculator(classification, BlinnLoop::FillSide::LEFT);
 
@@ -322,14 +351,25 @@ struct BezierCropImpl {
 					//Something is going to be drawn, reset the primitive assembly
 					indices.emplace_back(PRIMITIVE_RESTART_INDEX);
 
+					//Determine if the control points are inside or outside to form a quad
+					const auto b1IsOutside = std::signbit(Math::getSignedDistance(segmentAxis, segment[1]));
+					const auto b2IsOutside = std::signbit(Math::getSignedDistance(segmentAxis, segment[2]));
+
 					//The vertices are not going to be drawn in order, so that a triangle strip is formed
-					constexpr std::array<size_t, segment.size()> TRIANGLE_STRIP_MAPPING = {
-						0, 1, 3, 2
-					};
+					std::array<size_t, segment.size()> triangleStripMapping;
+					if(b1IsOutside && b2IsOutside) {
+						triangleStripMapping = { 0, 3, 1, 2 };
+					} else if(b1IsOutside && !b2IsOutside) {
+						triangleStripMapping = { 0, 2, 1, 3 };
+					} else if(!b1IsOutside && b2IsOutside) {
+						triangleStripMapping = { 0, 1, 2, 3 };
+					} else { //if(!b1IsOutside && !b2IsOutside) {
+						triangleStripMapping = { 0, 1, 3, 2 };
+					} 
 
 					//Ensure the size of the arrays is correct
 					static_assert(segment.size() == klmCoords.klmCoords.size(), "Sizes must match");
-					static_assert(segment.size() == TRIANGLE_STRIP_MAPPING.size(), "Sizes must match");
+					static_assert(segment.size() == triangleStripMapping.size(), "Sizes must match");
 
 					//Add all the new vertices to the vertex vector with
 					//its corresponding indices
@@ -338,7 +378,7 @@ struct BezierCropImpl {
 						indices.emplace_back(vertices.size()); 
 
 						//Obtain the components of the vertex and add them to the vertex list
-						const auto index = TRIANGLE_STRIP_MAPPING[j];
+						const auto index = triangleStripMapping[j];
 						const auto& position = segment[index];
 						const auto& klmCoord = klmCoords.klmCoords[index];
 
@@ -663,7 +703,7 @@ struct BezierCropImpl {
 				false,												//Rasterizer discard enable
 				vk::PolygonMode::eFill,								//Polygon mode
 				vk::CullModeFlagBits::eNone, 						//Cull faces
-				vk::FrontFace::eClockwise,							//Front face direction
+				vk::FrontFace::eCounterClockwise,					//Front face direction
 				false, 0.0f, 0.0f, 0.0f,							//Depth bias
 				1.0f												//Line width
 			);
@@ -739,6 +779,7 @@ struct BezierCropImpl {
 
 	Math::Vec2f								size;
 	BezierCrop::BezierLoop					crop;
+	Math::Vec4f								lineColor;
 	float									lineWidth;
 
 	std::unique_ptr<Open>					opened;
@@ -752,6 +793,8 @@ struct BezierCropImpl {
 		, videoIn()
 		, size(size)
 		, crop(std::move(crop))
+		, lineColor(0)
+		, lineWidth(0)
 	{
 	}
 
@@ -773,8 +816,9 @@ struct BezierCropImpl {
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity(),
-					bezierCrop.getLineWidth()
+					bezierCrop.getLineColor(),
+					bezierCrop.getLineWidth(),
+					bezierCrop.getOpacity()
 			);
 		}
 
@@ -795,8 +839,9 @@ struct BezierCropImpl {
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity(),
-					bezierCrop.getLineWidth()
+					bezierCrop.getLineColor(),
+					bezierCrop.getLineWidth(),
+					bezierCrop.getOpacity()
 			);
 			lock.lock();
 
@@ -962,6 +1007,23 @@ struct BezierCropImpl {
 		return crop;
 	}
 
+	void setLineColor(const Math::Vec4f& color) {
+		if(this->lineColor != color) {
+			this->lineColor = color;
+
+			if(opened) {
+				opened->updateLineColorUniform(this->lineColor);
+			}
+
+			lastFrames.clear(); //Will force hasChanged() to true
+		}
+	}
+
+	const Math::Vec4f& getLineColor() const {
+		return lineColor;
+	}
+
+
 	void setLineWidth(float lineWidth) {
 		if(this->lineWidth != lineWidth) {
 			this->lineWidth = lineWidth;
@@ -1007,8 +1069,9 @@ private:
 					bezierCrop.getScalingMode(),
 					getCrop(),
 					bezierCrop.getTransform(),
-					bezierCrop.getOpacity(),
-					bezierCrop.getLineWidth()
+					bezierCrop.getLineColor(),
+					bezierCrop.getLineWidth(),
+					bezierCrop.getOpacity()
 				);
 			}
 
@@ -1074,6 +1137,16 @@ void BezierCrop::setCrop(BezierLoop shape) {
 const BezierCrop::BezierLoop& BezierCrop::getCrop() const {
 	return (*this)->getCrop();
 }
+
+
+void BezierCrop::setLineColor(const Math::Vec4f& color) {
+	(*this)->setLineColor(color);
+}
+
+const Math::Vec4f& BezierCrop::getLineColor() const {
+	return (*this)->getLineColor();
+}
+
 
 
 void BezierCrop::setLineWidth(float width) {

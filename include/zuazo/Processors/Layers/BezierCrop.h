@@ -5,7 +5,7 @@
 #include <zuazo/LayerBase.h>
 #include <zuazo/Signal/ConsumerLayout.h>
 #include <zuazo/Utils/Pimpl.h>
-#include <zuazo/Math/Bezier.h>
+#include <zuazo/Math/BezierLoop.h>
 
 #include <functional>
 
@@ -40,6 +40,9 @@ public:
 
 	void									setCrop(BezierLoop crop);
 	const BezierLoop&						getCrop() const;
+
+	void									setLineColor(const Math::Vec4f& color);
+	const Math::Vec4f&						getLineColor() const;
 
 	void									setLineWidth(float width);
 	float									getLineWidth() const;
