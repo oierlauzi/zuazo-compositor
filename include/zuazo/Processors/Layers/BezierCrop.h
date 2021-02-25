@@ -27,7 +27,7 @@ public:
 				std::string name,
 				const RendererBase* renderer,
 				Math::Vec2f size,
-				BezierLoop crop );
+				Utils::BufferView<const BezierLoop> crop );
 	BezierCrop(const BezierCrop& other) = delete;
 	BezierCrop(BezierCrop&& other);
 	virtual ~BezierCrop();
@@ -38,8 +38,8 @@ public:
 	void									setSize(Math::Vec2f size);
 	Math::Vec2f								getSize() const;
 
-	void									setCrop(BezierLoop crop);
-	const BezierLoop&						getCrop() const;
+	void									setCrop(Utils::BufferView<const BezierLoop> crop);
+	Utils::BufferView<const BezierLoop>		getCrop() const;
 
 	void									setLineColor(const Math::Vec4f& color);
 	const Math::Vec4f&						getLineColor() const;

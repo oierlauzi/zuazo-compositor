@@ -1,8 +1,5 @@
 #include <zuazo/Processors/Layers/BezierCrop.h>
 
-#include "../../BlinnLoop/Classifier.h"
-#include "../../BlinnLoop/KLMCalculator.h"
-
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
 #include <zuazo/Utils/StaticId.h>
@@ -13,7 +10,7 @@
 #include <zuazo/Graphics/ColorTransfer.h>
 #include <zuazo/Math/Geometry.h>
 #include <zuazo/Math/Absolute.h>
-#include <zuazo/Math/Triangulator.h>
+#include <zuazo/Math/LoopBlinn/OutlineProcessor.h>
 
 #include <utility>
 #include <memory>
@@ -102,11 +99,9 @@ struct BezierCropImpl {
 		std::shared_ptr<Resources>							resources;
 		vk::DescriptorSet									descriptorSet;
 
-		Math::Triangulator<float, uint16_t>					triangulator;
+		Math::LoopBlinn::OutlineProcessor<float, uint16_t>	outlineProcessor;
 		Graphics::Frame::Geometry							frameGeometry;
 
-		std::vector<Vertex>									vertices;		
-		std::vector<Index>									indices;
 		bool												flushVertexBuffer;
 		bool												flushIndexBuffer;
 
@@ -117,7 +112,7 @@ struct BezierCropImpl {
 		Open(	const Graphics::Vulkan& vulkan,
 				Math::Vec2f size,
 				ScalingMode scalingMode,
-				const BezierCrop::BezierLoop& crop,
+				Utils::BufferView<const BezierCrop::BezierLoop> crop,
 				const Math::Transformf& transform,
 				const Math::Vec4f& lineColor,
 				float lineWidth,
@@ -126,7 +121,7 @@ struct BezierCropImpl {
 			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
 														createDescriptorPool(vulkan) ))
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
-			, triangulator()
+			, outlineProcessor()
 			, frameGeometry(scalingMode, size)
 			, flushVertexBuffer(false)
 			, flushIndexBuffer(false)
@@ -135,11 +130,12 @@ struct BezierCropImpl {
 			, pipeline()
 		{
 			resources->uniformBuffer.writeDescirptorSet(vulkan, descriptorSet);
+
+			setCrop(crop);
 			updateModelMatrixUniform(transform);
 			updateLineColorUniform(lineColor);
 			updateLineWidthUniform(lineWidth);
 			updateOpacityUniform(opacity);
-			fillVertexBufferPosition(crop);
 		}
 
 		~Open() {
@@ -163,13 +159,14 @@ struct BezierCropImpl {
 			assert(frame);
 
 			//Update the vertex buffer if needed
-			if(frameGeometry.useFrame(*frame) || flushVertexBuffer) {
-				//Size has changed
-				fillVertexBufferTexCoord();
+			if(frameGeometry.useFrame(*frame)) {
+				//Size has changed. Recalculate the vertex buffer
+				flushVertexBuffer = true;
 			}
 
 			//Upload vertex and index data if necessary
-			flushVertexInputBuffers();
+			fillVertexBuffer();
+			fillIndexBuffer();
 
 			//Only draw if geometry is defined
 			if(resources->indexBuffer.size()) {
@@ -227,6 +224,14 @@ struct BezierCropImpl {
 				//Add the dependencies to the command buffer
 				cmd.addDependencies({ resources, pipeline, frame });
 			}		
+		}
+
+		void setCrop(Utils::BufferView<const BezierCrop::BezierLoop> crop) {
+			outlineProcessor.clear();
+			outlineProcessor.addOutline(crop);
+			
+			flushIndexBuffer = true;
+			flushVertexBuffer = true;
 		}
 
 		void updateModelMatrixUniform(const Math::Transformf& transform) {
@@ -295,140 +300,13 @@ struct BezierCropImpl {
 			}
 		}
 
-		void fillVertexBufferPosition(const BezierCrop::BezierLoop& l) {
-			constexpr Index PRIMITIVE_RESTART_INDEX = ~Index(0);
-
-			BezierCrop::BezierLoop loop = l; //TODO avoid allocation
-
-			//Ensure that the loop is defined counter clock-wise
-			const auto loopBuffer = Utils::BufferView<const Math::Vec2f>(
-				loop.cbegin(), loop.cend()
-			);
-			if(Math::getSignedArea(loopBuffer) > 0) {
-				//Loop is clock-wise, reverse it
-				loop.reverse();
-			}
-			assert(Math::getSignedArea(loopBuffer) <= 0);
-
-			//Obtain the vertices in the inner hull
-			std::vector<Math::Vec2f> innerHull; //TODO avoid allocation
-			for(size_t i = 0; i < loop.getSegmentCount(); ++i) {
-				const auto& segment = loop.getSegment(i);
-				const auto segmentAxis = Zuazo::Math::Line<float, 2>(segment.front(), segment.back());
-
-				//First point will always be at the inner hull
-				innerHull.emplace_back(segment.front());
-
-				//Evaluate it for the 2 control points
-				for(size_t j = 1; j < segment.degree(); ++j) {
-					const auto sDist = Math::getSignedDistance(segmentAxis, segment[j]);
-		
-					if(sDist < 0) {
-						//This segment lies on the inside
-						innerHull.emplace_back(segment[j]);
-					}
-				}
-			}
-
-			//Triangulate the vertices
-			indices = triangulator(innerHull, PRIMITIVE_RESTART_INDEX); //TODO: vertex to position
-
-			//Insert the vertices from the inner hull
-			vertices.clear();
-			vertices.insert(vertices.cend(), innerHull.cbegin(), innerHull.cend());
-
-			//Add the outline vertices
-			const BlinnLoop::Classifier<float> curveClassifier;
-			const BlinnLoop::KLMCalculator<float> klmCoordCalculator;
-			for(size_t i = 0; i < loop.getSegmentCount(); ++i) {
-				const auto& segment = loop.getSegment(i);
-				const auto segmentAxis = Zuazo::Math::Line<float, 2>(segment.front(), segment.back());
-				const auto classification = curveClassifier(segment);
-				const auto klmCoords = klmCoordCalculator(classification, BlinnLoop::FillSide::LEFT);
-
-				//Optimize away lines and points as they have been drawn at the inner hull
-				if(!klmCoords.isLineOrPoint && std::isnan(klmCoords.subdivisionParameter)) {
-					//Something is going to be drawn, reset the primitive assembly
-					indices.emplace_back(PRIMITIVE_RESTART_INDEX);
-
-					//Determine if the control points are inside or outside to form a quad
-					const auto b1IsOutside = std::signbit(Math::getSignedDistance(segmentAxis, segment[1]));
-					const auto b2IsOutside = std::signbit(Math::getSignedDistance(segmentAxis, segment[2]));
-
-					//The vertices are not going to be drawn in order, so that a triangle strip is formed
-					std::array<size_t, segment.size()> triangleStripMapping;
-					if(b1IsOutside && b2IsOutside) {
-						triangleStripMapping = { 0, 3, 1, 2 };
-					} else if(b1IsOutside && !b2IsOutside) {
-						triangleStripMapping = { 0, 2, 1, 3 };
-					} else if(!b1IsOutside && b2IsOutside) {
-						triangleStripMapping = { 0, 1, 2, 3 };
-					} else { //if(!b1IsOutside && !b2IsOutside) {
-						triangleStripMapping = { 0, 1, 3, 2 };
-					} 
-
-					//Ensure the size of the arrays is correct
-					static_assert(segment.size() == klmCoords.klmCoords.size(), "Sizes must match");
-					static_assert(segment.size() == triangleStripMapping.size(), "Sizes must match");
-
-					//Add all the new vertices to the vertex vector with
-					//its corresponding indices
-					for(size_t j = 0; j < segment.size(); ++j) {
-						//Simply refer to the following vertex
-						indices.emplace_back(vertices.size()); 
-
-						//Obtain the components of the vertex and add them to the vertex list
-						const auto index = triangleStripMapping[j];
-						const auto& position = segment[index];
-						const auto& klmCoord = klmCoords.klmCoords[index];
-
-						vertices.emplace_back(
-							position, 
-							Zuazo::Math::Vec2f(), 
-							klmCoord
-						);
-					}
-				} else if(!std::isnan(klmCoords.subdivisionParameter)) {
-					assert(!"Subdivision required!"); //TODO
-				}
-			}
-
-			if(vertices.size() >= std::numeric_limits<Index>::max()) {
-				//Could be removed by increasing to 32bit indices
-				throw Exception("Too many vertices for the index precision");
-			}
-
-			//Signal flushing both buffers
-			flushIndexBuffer = true;
-			flushVertexBuffer = true;
-		}
-
-		void fillVertexBufferTexCoord() {
-			const auto surfaceSize = frameGeometry.calculateSurfaceSize();
-			for(auto& vertex : vertices) {
-				//Obtain the interpolation parameter based on the position
-				const auto t = Math::ilerp(
-					-surfaceSize.first / 2.0f, 
-					+surfaceSize.first / 2.0f, 
-					vertex.position
-				);
-
-				//Interpolate the texture coordinatesvert
-				vertex.texCoord = Math::lerp(
-					(Math::Vec2f(1.0f) - surfaceSize.second) / 2.0f,
-					(Math::Vec2f(1.0f) + surfaceSize.second) / 2.0f,
-					t
-				);
-			}
-
-			//Flush
-			flushVertexBuffer = true;
-		}
-
-		void flushVertexInputBuffers() {
+		void fillVertexBuffer() {
 			assert(resources);
 
 			if(flushVertexBuffer) {
+				const auto surfaceSize = frameGeometry.calculateSurfaceSize();
+				const auto& vertices = outlineProcessor.getVertices();
+
 				//Wait for any previous transfers
 				resources->vertexBuffer.waitCompletion(vulkan);
 
@@ -437,15 +315,37 @@ struct BezierCropImpl {
 					resources->vertexBuffer = createVertexBuffer(vulkan, vertices.size());
 				}
 
+				//Obtain the buffer data
+				Utils::BufferView<Vertex> vertexBufferData(
+					reinterpret_cast<Vertex*>(resources->vertexBuffer.data()),
+					resources->vertexBuffer.size() / sizeof(Vertex)
+				);
+
 				//Ensure the size is correct
-				assert(resources->vertexBuffer.size() == vertices.size()*sizeof(Vertex));
+				assert(vertexBufferData.size() == vertices.size());
 
 				//Copy the data
-				std::memcpy(
-					resources->vertexBuffer.data(), 
-					vertices.data(), 
-					vertices.size()*sizeof(Vertex)
-				);
+				for(size_t i = 0; i < vertexBufferData.size(); ++i) {
+					//Obtain the interpolation parameter based on the position
+					const auto t = Math::ilerp(
+						-surfaceSize.first / 2.0f, 
+						+surfaceSize.first / 2.0f, 
+						vertices[i].pos
+					);
+
+					//Interpolate the texture coordinates
+					const auto texCoord = Math::lerp(
+						(Math::Vec2f(1.0f) - surfaceSize.second) / 2.0f,
+						(Math::Vec2f(1.0f) + surfaceSize.second) / 2.0f,
+						t
+					);
+
+					vertexBufferData[i] = Vertex(
+						vertices[i].pos,
+						texCoord,
+						vertices[i].klm
+					);
+				}
 
 				//Flush the buffer
 				resources->vertexBuffer.flushData(
@@ -458,7 +358,15 @@ struct BezierCropImpl {
 				flushVertexBuffer = false;
 			}
 
+			assert(!flushVertexBuffer);
+		}
+
+		void fillIndexBuffer() {
+			assert(resources);
+
 			if(flushIndexBuffer) {
+				const auto& indices = outlineProcessor.getIndices();
+
 				//Wait for any previous transfers
 				resources->indexBuffer.waitCompletion(vulkan);
 
@@ -488,26 +396,33 @@ struct BezierCropImpl {
 				flushIndexBuffer = false;
 			}
 
-			assert(!flushVertexBuffer);
 			assert(!flushIndexBuffer);
 		}
 
 
 
 		static Graphics::StagedBuffer createVertexBuffer(const Graphics::Vulkan& vulkan, size_t vertexCount) {
-			return Graphics::StagedBuffer(
-				vulkan,
-				vk::BufferUsageFlagBits::eVertexBuffer,
-				sizeof(Vertex) * vertexCount
-			);
+			if(vertexCount > 0) {
+				return Graphics::StagedBuffer(
+					vulkan,
+					vk::BufferUsageFlagBits::eVertexBuffer,
+					sizeof(Vertex) * vertexCount
+				);
+			} else {
+				return {};
+			}
 		}
 
 		static Graphics::StagedBuffer createIndexBuffer(const Graphics::Vulkan& vulkan, size_t indexCount) {
-			return Graphics::StagedBuffer(
-				vulkan,
-				vk::BufferUsageFlagBits::eIndexBuffer,
-				sizeof(Index) * indexCount
-			);
+			if(indexCount > 0) {
+				return Graphics::StagedBuffer(
+					vulkan,
+					vk::BufferUsageFlagBits::eIndexBuffer,
+					sizeof(Index) * indexCount
+				);
+			} else {
+				return {};
+			}
 		}
 
 		static vk::DescriptorSetLayout getDescriptorSetLayout(	const Graphics::Vulkan& vulkan) 
@@ -778,7 +693,7 @@ struct BezierCropImpl {
 	Input									videoIn;
 
 	Math::Vec2f								size;
-	BezierCrop::BezierLoop					crop;
+	std::vector<BezierCrop::BezierLoop>		crop;
 	Math::Vec4f								lineColor;
 	float									lineWidth;
 
@@ -788,11 +703,11 @@ struct BezierCropImpl {
 
 	BezierCropImpl(	BezierCrop& owner, 
 					Math::Vec2f size, 
-					BezierCrop::BezierLoop crop )
+					Utils::BufferView<const BezierCrop::BezierLoop> crop )
 		: owner(owner)
 		, videoIn()
 		, size(size)
-		, crop(std::move(crop))
+		, crop(crop.cbegin(), crop.cend())
 		, lineColor(0)
 		, lineWidth(0)
 	{
@@ -998,12 +913,17 @@ struct BezierCropImpl {
 	}
 
 
-	void setCrop(BezierCrop::BezierLoop crop) {
-		this->crop = std::move(crop);
+	void setCrop(Utils::BufferView<const BezierCrop::BezierLoop> crop) {
+		this->crop.insert(this->crop.cend(), crop.cbegin(), crop.cend());
+
+		if(opened) {
+			opened->setCrop(this->crop);
+		}
+
 		lastFrames.clear(); //Will force hasChanged() to true
 	}
 
-	const BezierCrop::BezierLoop& getCrop() const {
+	Utils::BufferView<const BezierCrop::BezierLoop> getCrop() const {
 		return crop;
 	}
 
@@ -1088,8 +1008,8 @@ BezierCrop::BezierCrop(	Instance& instance,
 						std::string name,
 						const RendererBase* renderer,
 						Math::Vec2f size,
-						BezierLoop shape )
-	: Utils::Pimpl<BezierCropImpl>({}, *this, size, std::move(shape))
+						Utils::BufferView<const BezierLoop> crop )
+	: Utils::Pimpl<BezierCropImpl>({}, *this, size, crop)
 	, ZuazoBase(
 		instance, 
 		std::move(name),
@@ -1130,11 +1050,11 @@ Math::Vec2f BezierCrop::getSize() const {
 }
 
 
-void BezierCrop::setCrop(BezierLoop shape) {
-	(*this)->setCrop(std::move(shape));
+void BezierCrop::setCrop(Utils::BufferView<const BezierLoop> crop) {
+	(*this)->setCrop(crop);
 }
 
-const BezierCrop::BezierLoop& BezierCrop::getCrop() const {
+Utils::BufferView<const BezierCrop::BezierLoop> BezierCrop::getCrop() const {
 	return (*this)->getCrop();
 }
 
