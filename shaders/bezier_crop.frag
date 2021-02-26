@@ -20,31 +20,40 @@ layout(set = 0, binding = 1) uniform OutputColorTransferBlock{
 layout(set = 1, binding = 1) uniform LayerDataBlock {
 	vec4 lineColor;
 	float lineWidth;
+	float lineSmoothness;
 	float opacity;
 };
 
 //Frame descriptor set
 frame_descriptor_set(2)
 
+//Constants
+const vec4 voidColor = vec4(0.0f);
+
 void main() {
 	//Obtain th signed distance to the curve
 	const float sDist = bezier3_signed_distance(in_klm);
 
-	//Obtain the line factor and the edge factor from the distance
-	const float lineFactor = clamp(0.5f - sDist - lineWidth, 0.0f, 1.0f);
-	const float edgeFactor = clamp(0.5f - sDist, 0.0f, 1.0f);
+	//Obtain the blend coefficients
+	const float blend0 = clamp(0.5f + sDist / lineSmoothness, 0.0f, 1.0f); //Void gain
+	const float blend1 = clamp(0.5f - (sDist + lineWidth) / lineSmoothness, 0.0f, 1.0f); //Frame gain
+	const float blend2 = 1.0f - blend0 - blend1; //Line gain
 
-	//Sample the color from the frame
-	out_color = frame_texture(2, in_texCoord);
+	vec4 frameColor;
+	if(blend1 > 0.0f) {
+		//Sample the color from the frame, as it will
+		//be visible
+		frameColor = frame_texture(2, in_texCoord);
 
-	//Perform colorspace conversion
-	out_color = ct_transferColor(frame_color_transfer(2), outColorTransfer, out_color);
+		//Perform colorspace conversion
+		frameColor = ct_transferColor(frame_color_transfer(2), outColorTransfer, frameColor);
+	}
 
-	//Apply the line color if necessary
-	out_color = mix(lineColor, out_color, lineFactor);
+	//Obtain the resulting color
+	out_color = blend0*voidColor + blend1*frameColor + blend2*lineColor;
 
 	//Apply the opacity and bezier alpha to it
-	out_color.a *= opacity * edgeFactor;
+	out_color.a *= opacity;
 
 	if(out_color.a <= 0.0f) {
 		discard;

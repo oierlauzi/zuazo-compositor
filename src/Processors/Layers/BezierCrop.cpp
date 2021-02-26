@@ -63,6 +63,7 @@ struct BezierCropImpl {
 		enum LayerDataUniforms {
 			LAYERDATA_UNIFORM_LINECOLOR,
 			LAYERDATA_UNIFORM_LINEWIDTH,
+			LAYERDATA_UNIFORM_LINESMOOTHNESS,
 			LAYERDATA_UNIFORM_OPACITY,
 
 			LAYERDATA_UNIFORM_COUNT
@@ -71,7 +72,8 @@ struct BezierCropImpl {
 		static constexpr std::array<Utils::Area, LAYERDATA_UNIFORM_COUNT> LAYERDATA_UNIFORM_LAYOUT = {
 			Utils::Area(0,									sizeof(Math::Vec4f) ),	//LAYERDATA_UNIFORM_LINECOLOR
 			Utils::Area(sizeof(Math::Vec4f),				sizeof(float)  		),	//LAYERDATA_UNIFORM_LINEWIDTH
-			Utils::Area(sizeof(Math::Vec4f)+sizeof(float), 	sizeof(float)  		)	//LAYERDATA_UNIFORM_OPACITY
+			Utils::Area(sizeof(Math::Vec4f)+sizeof(float)*1,sizeof(float)  		),	//LAYERDATA_UNIFORM_LINESMOOTHNESS
+			Utils::Area(sizeof(Math::Vec4f)+sizeof(float)*2,sizeof(float)  		)	//LAYERDATA_UNIFORM_OPACITY
 		};
 
 		static constexpr uint32_t VERTEX_BUFFER_BINDING = 0;
@@ -116,6 +118,7 @@ struct BezierCropImpl {
 				const Math::Transformf& transform,
 				const Math::Vec4f& lineColor,
 				float lineWidth,
+				float lineSmoothness,
 				float opacity ) 
 			: vulkan(vulkan)
 			, resources(Utils::makeShared<Resources>(	createUniformBuffer(vulkan),
@@ -135,6 +138,7 @@ struct BezierCropImpl {
 			updateModelMatrixUniform(transform);
 			updateLineColorUniform(lineColor);
 			updateLineWidthUniform(lineWidth);
+			updateLineSmoothnessUniform(lineSmoothness);
 			updateOpacityUniform(opacity);
 		}
 
@@ -270,6 +274,19 @@ struct BezierCropImpl {
 				&lineWidth,
 				sizeof(lineWidth),
 				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_LINEWIDTH].offset()
+			);
+		}
+
+		void updateLineSmoothnessUniform(float lineSmooth) {
+			assert(resources);
+			resources->uniformBuffer.waitCompletion(vulkan);			
+
+			resources->uniformBuffer.write(
+				vulkan,
+				DESCRIPTOR_BINDING_LAYERDATA,
+				&lineSmooth,
+				sizeof(lineSmooth),
+				LAYERDATA_UNIFORM_LAYOUT[LAYERDATA_UNIFORM_LINESMOOTHNESS].offset()
 			);
 		}
 
@@ -696,6 +713,7 @@ struct BezierCropImpl {
 	std::vector<BezierCrop::BezierLoop>		crop;
 	Math::Vec4f								lineColor;
 	float									lineWidth;
+	float									lineSmoothness;
 
 	std::unique_ptr<Open>					opened;
 	LastFrames								lastFrames;
@@ -710,6 +728,7 @@ struct BezierCropImpl {
 		, crop(crop.cbegin(), crop.cend())
 		, lineColor(0)
 		, lineWidth(0)
+		, lineSmoothness(1)
 	{
 	}
 
@@ -733,6 +752,7 @@ struct BezierCropImpl {
 					bezierCrop.getTransform(),
 					bezierCrop.getLineColor(),
 					bezierCrop.getLineWidth(),
+					bezierCrop.getLineSmoothness(),
 					bezierCrop.getOpacity()
 			);
 		}
@@ -756,6 +776,7 @@ struct BezierCropImpl {
 					bezierCrop.getTransform(),
 					bezierCrop.getLineColor(),
 					bezierCrop.getLineWidth(),
+					bezierCrop.getLineSmoothness(),
 					bezierCrop.getOpacity()
 			);
 			lock.lock();
@@ -959,6 +980,24 @@ struct BezierCropImpl {
 	float getLineWidth() const {
 		return lineWidth;
 	}
+
+
+	void setLineSmoothness(float lineSmoothness) {
+		if(this->lineSmoothness != lineSmoothness) {
+			this->lineSmoothness = lineSmoothness;
+
+			if(opened) {
+				opened->updateLineSmoothnessUniform(this->lineSmoothness);
+			}
+
+			lastFrames.clear(); //Will force hasChanged() to true
+		}
+	}
+
+	float getLineSmoothness() const {
+		return lineSmoothness;
+	}
+
 	
 private:
 	void recreateCallback(	BezierCrop& bezierCrop, 
@@ -991,6 +1030,7 @@ private:
 					bezierCrop.getTransform(),
 					bezierCrop.getLineColor(),
 					bezierCrop.getLineWidth(),
+					bezierCrop.getLineSmoothness(),
 					bezierCrop.getOpacity()
 				);
 			}
@@ -1068,13 +1108,21 @@ const Math::Vec4f& BezierCrop::getLineColor() const {
 }
 
 
-
 void BezierCrop::setLineWidth(float width) {
-	(*this)->setLineWidth(std::move(width));
+	(*this)->setLineWidth(width);
 }
 
 float BezierCrop::getLineWidth() const {
 	return (*this)->getLineWidth();
+}
+
+
+void BezierCrop::setLineSmoothness(float smoothness) {
+	(*this)->setLineSmoothness(smoothness);
+}
+
+float BezierCrop::getLineSmoothness() const {
+	return (*this)->getLineSmoothness();
 }
 
 }

@@ -47,6 +47,9 @@ public:
 	void									setLineWidth(float width);
 	float									getLineWidth() const;
 
+	void									setLineSmoothness(float smoothness);
+	float									getLineSmoothness() const;
+
 };
 
 }
