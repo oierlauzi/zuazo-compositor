@@ -13,6 +13,9 @@
 #include <zuazo/Sources/FFmpegClip.h>
 #include <zuazo/Math/Geometry.h>
 
+#include <zuazo/Math/LoopBlinn/Classifier.h>
+#include <zuazo/Math/LoopBlinn/KLMCalculator.h>
+
 #include <mutex>
 #include <iostream>
 
@@ -44,9 +47,6 @@ createLoop(	Zuazo::Utils::BufferView<const std::array<Zuazo::Math::Vec2f, 3>> po
 		Zuazo::Utils::BufferView<const std::array<Zuazo::Math::Vec2f, 3>>(centeredPoints)
 	);
 }
-
-
-
 
 
 
@@ -118,24 +118,87 @@ int main(int argc, const char* argv[]) {
 		5.0f*Zuazo::Math::Vec2f(15,-30)
 	};
 
-	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 4> BLOB_POINTS = {
+	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 4> BRIDGE_POINTS = {
 		5.0f*Zuazo::Math::Vec2f(0,0),
-		5.0f*Zuazo::Math::Vec2f(25,10),
-		5.0f*Zuazo::Math::Vec2f(30,-10),
-		5.0f*Zuazo::Math::Vec2f(45,0),
-		5.0f*Zuazo::Math::Vec2f(60,15),
-		5.0f*Zuazo::Math::Vec2f(40,20),
-		5.0f*Zuazo::Math::Vec2f(45,30),
-		5.0f*Zuazo::Math::Vec2f(60,45),
-		5.0f*Zuazo::Math::Vec2f(0,65),
-		5.0f*Zuazo::Math::Vec2f(10,50),
-		5.0f*Zuazo::Math::Vec2f(20,30),
-		5.0f*Zuazo::Math::Vec2f(20,15)
+		5.0f*Zuazo::Math::Vec2f(50,-60),
+		5.0f*Zuazo::Math::Vec2f(70,-60),
+		5.0f*Zuazo::Math::Vec2f(120,0),
+		5.0f*Zuazo::Math::Vec2f(120,5),
+		5.0f*Zuazo::Math::Vec2f(120,15),
+		5.0f*Zuazo::Math::Vec2f(120,20),
+		5.0f*Zuazo::Math::Vec2f(70,-50),
+		5.0f*Zuazo::Math::Vec2f(50,-50),
+		5.0f*Zuazo::Math::Vec2f(0,20),
+		5.0f*Zuazo::Math::Vec2f(0,15),
+		5.0f*Zuazo::Math::Vec2f(0,5)
+	};
+
+	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 10> BLOB_POINTS = {
+		2.0f*Zuazo::Math::Vec2f(0.01776377,-0.17398693),
+		2.0f*Zuazo::Math::Vec2f(47.99201,14.161736),
+		2.0f*Zuazo::Math::Vec2f(48.965598,-32.077492),
+		2.0f*Zuazo::Math::Vec2f(83.348064,-0.01126961),
+		2.0f*Zuazo::Math::Vec2f(97.819182,-29.087447),
+		2.0f*Zuazo::Math::Vec2f(123.05974,20.423792),
+		2.0f*Zuazo::Math::Vec2f(131.82314,0.30587143),
+		2.0f*Zuazo::Math::Vec2f(140.49168,-19.594264),
+		2.0f*Zuazo::Math::Vec2f(202.56729,29.946176),
+		2.0f*Zuazo::Math::Vec2f(144.12213,64.805866),
+		2.0f*Zuazo::Math::Vec2f(110.86154,84.644185),
+		2.0f*Zuazo::Math::Vec2f(111.93258,45.117509),
+		2.0f*Zuazo::Math::Vec2f(96.304268,52.553467),
+		2.0f*Zuazo::Math::Vec2f(79.837563,60.388331),
+		2.0f*Zuazo::Math::Vec2f(75.96078,62.26659),
+		2.0f*Zuazo::Math::Vec2f(58.846595,70.487817),
+		2.0f*Zuazo::Math::Vec2f(57.143571,91.471028),
+		2.0f*Zuazo::Math::Vec2f(54.613421,79.011568),
+		2.0f*Zuazo::Math::Vec2f(39.027068,70.51436),
+		2.0f*Zuazo::Math::Vec2f(37.397078,49.030138),
+		2.0f*Zuazo::Math::Vec2f(3.2627725,79.797641),
+		2.0f*Zuazo::Math::Vec2f(13.270392,82.324973),
+		2.0f*Zuazo::Math::Vec2f(13.741668,120.80742),
+		2.0f*Zuazo::Math::Vec2f(10.339912,96.872645),
+		2.0f*Zuazo::Math::Vec2f(-0.12088594,105.23169),
+		2.0f*Zuazo::Math::Vec2f(-18.810885,104.25683),
+		2.0f*Zuazo::Math::Vec2f(-40.748849,48.195014),
+		2.0f*Zuazo::Math::Vec2f(-35.464911,27.095026),
+		2.0f*Zuazo::Math::Vec2f(-30.180973,5.9950382),
+		2.0f*Zuazo::Math::Vec2f(-14.484154,-4.7223232),
+		/*2.0f*Zuazo::Math::Vec2f(0.01776377,-0.17398693),
+		2.0f*Zuazo::Math::Vec2f(47.99201,14.161736),
+		2.0f*Zuazo::Math::Vec2f(48.965598,-32.077492),
+		2.0f*Zuazo::Math::Vec2f(83.348064,-0.01126961),
+		2.0f*Zuazo::Math::Vec2f(97.819182,-29.087447),
+		2.0f*Zuazo::Math::Vec2f(105.15965,17.747062),
+		2.0f*Zuazo::Math::Vec2f(131.82314,0.30587143),
+		2.0f*Zuazo::Math::Vec2f(110.28313,38.492959),
+		2.0f*Zuazo::Math::Vec2f(108.76577,22.318506),
+		2.0f*Zuazo::Math::Vec2f(144.12213,64.805866),
+		2.0f*Zuazo::Math::Vec2f(111.93321,45.118503 ),
+		2.0f*Zuazo::Math::Vec2f(111.93321,45.118503),
+		2.0f*Zuazo::Math::Vec2f(96.304268,52.553467),
+		2.0f*Zuazo::Math::Vec2f(79.837563,60.388331),
+		2.0f*Zuazo::Math::Vec2f(75.96078,62.26659),
+		2.0f*Zuazo::Math::Vec2f(58.846595,70.487817),
+		2.0f*Zuazo::Math::Vec2f(57.143571,91.471028),
+		2.0f*Zuazo::Math::Vec2f(54.613421,79.011568),
+		2.0f*Zuazo::Math::Vec2f(39.027068,70.51436),
+		2.0f*Zuazo::Math::Vec2f(29.160143,-9.0405203),
+		2.0f*Zuazo::Math::Vec2f(-40.246104,14.206862),
+		2.0f*Zuazo::Math::Vec2f(13.270392,82.324973),
+		2.0f*Zuazo::Math::Vec2f(13.741668,120.80742),
+		2.0f*Zuazo::Math::Vec2f(10.339912,96.872645),
+		2.0f*Zuazo::Math::Vec2f(-0.12088594,105.23169),
+		2.0f*Zuazo::Math::Vec2f(-18.810885,104.25683),
+		2.0f*Zuazo::Math::Vec2f(-40.748849,48.195014),
+		2.0f*Zuazo::Math::Vec2f(-35.464911,27.095026),
+		2.0f*Zuazo::Math::Vec2f(-30.180973,5.9950382),
+		2.0f*Zuazo::Math::Vec2f(-14.484154,-4.7223232),*/
 	};
 
 	//Create a bezier loop with the points
 	Zuazo::Math::Vec2f loopSize;
-	auto loop = createLoop(HEART_POINTS, loopSize);
+	auto loop = createLoop(BRIDGE_POINTS, loopSize);
 
 	//Create a layer for rendering to the window
 	Zuazo::Processors::Layers::BezierCrop bezierCrop(
@@ -149,9 +212,10 @@ int main(int argc, const char* argv[]) {
 	window.setLayers({bezierCrop});
 	bezierCrop.setScalingMode(Zuazo::ScalingMode::CROPPED);
 	bezierCrop.setScalingFilter(Zuazo::ScalingFilter::NEAREST);
-	bezierCrop.setLineWidth(10.0f);
-	bezierCrop.setLineSmoothness(10.0f);
+	bezierCrop.setLineWidth(0.0f);
+	//bezierCrop.setLineSmoothness(4.0f);
 	bezierCrop.setLineColor(Zuazo::Math::Vec4f(1, 0, 1, 1));
+	bezierCrop.setOpacity(0.5f);
 	bezierCrop.asyncOpen(lock);
 
 	//Create a video source

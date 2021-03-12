@@ -520,32 +520,14 @@ struct VideoSurfaceImpl {
 		owner = static_cast<VideoSurface&>(base);
 	}
 
-	void open(ZuazoBase& base) {
+	void open(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface);
 		assert(!opened);
 
 		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
-			opened = Utils::makeUnique<Open>(
-					videoSurface.getInstance().getVulkan(),
-					getSize(),
-					videoSurface.getScalingMode(),
-					videoSurface.getTransform(),
-					videoSurface.getOpacity()
-			);
-		}
-
-		assert(lastFrames.empty()); //Any hasChanged() should return true
-	}
-
-	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
-		assert(&owner.get() == &videoSurface);
-		assert(!opened);
-		assert(lock.owns_lock());
-
-		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
-			lock.unlock();
+			//Create in a unlocked environment
+			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
 					videoSurface.getInstance().getVulkan(),
 					getSize(),
@@ -553,43 +535,44 @@ struct VideoSurfaceImpl {
 					videoSurface.getTransform(),
 					videoSurface.getOpacity()
 			);
-			lock.lock();
+			if(lock) lock->lock();
 
+			//Write changes after locking
 			opened = std::move(newOpened);
 		}
 
 		assert(lastFrames.empty()); //Any hasChanged() should return true
+	}
+
+	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		assert(lock.owns_lock());
+		open(base, &lock);
 		assert(lock.owns_lock());
 	}
 
 
-	void close(ZuazoBase& base) {
+	void close(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		
+		//Write changes
 		videoIn.reset();
 		lastFrames.clear();
-		opened.reset();
+		auto oldOpened = std::move(opened);
+
+		//Reset in a unlocked environment
+		if(oldOpened) {
+			if(lock) lock->unlock();
+			oldOpened.reset();
+			if(lock) lock->lock();
+		}
 
 		assert(!opened);
 	}
 
 	void asyncClose(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& videoSurface = static_cast<VideoSurface&>(base);
-		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 		assert(lock.owns_lock());
-		
-		videoIn.reset();
-		lastFrames.clear();
-		auto oldOpened = std::move(opened);
-
-		if(oldOpened) {
-			lock.unlock();
-			oldOpened.reset();
-			lock.lock();
-		}
-
-		assert(!opened);
+		close(base, &lock);
 		assert(lock.owns_lock());
 	}
 
@@ -758,9 +741,9 @@ VideoSurface::VideoSurface(	Instance& instance,
 		std::move(name),
 		{ PadRef((*this)->videoIn) },
 		std::bind(&VideoSurfaceImpl::moved, std::ref(**this), std::placeholders::_1),
-		std::bind(&VideoSurfaceImpl::open, std::ref(**this), std::placeholders::_1),
+		std::bind(&VideoSurfaceImpl::open, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&VideoSurfaceImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1),
+		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&VideoSurfaceImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
 		renderer,

@@ -5,10 +5,12 @@
 #include "color_transfer.glsl"
 #include "frame.glsl"
 #include "bezier.glsl"
+#include "border.glsl"
 
 //Vertex I/O
 layout(location = 0) in vec2 in_texCoord;
 layout(location = 1) in vec3 in_klm;
+layout(location = 2) in float in_innerHull;
 
 layout(location = 0) out vec4 out_color;
 
@@ -27,30 +29,25 @@ layout(set = 1, binding = 1) uniform LayerDataBlock {
 //Frame descriptor set
 frame_descriptor_set(2)
 
-//Constants
-const vec4 voidColor = vec4(0.0f);
+
 
 void main() {
 	//Obtain th signed distance to the curve
-	const float sDist = bezier3_signed_distance(in_klm);
+	const float sDist = min(bezier3_signed_distance(in_klm), bezier1_signed_distance(in_innerHull));
 
-	//Obtain the blend coefficients
-	const float blend0 = clamp(0.5f + sDist / lineSmoothness, 0.0f, 1.0f); //Void gain
-	const float blend1 = clamp(0.5f - (sDist + lineWidth) / lineSmoothness, 0.0f, 1.0f); //Frame gain
-	const float blend2 = 1.0f - blend0 - blend1; //Line gain
+	//Sample the frame 
+	vec4 frameColor = frame_texture(2, in_texCoord);
+	frameColor = ct_transferColor(frame_color_transfer(2), outColorTransfer, frameColor);
 
-	vec4 frameColor;
-	if(blend1 > 0.0f) {
-		//Sample the color from the frame, as it will
-		//be visible
-		frameColor = frame_texture(2, in_texCoord);
-
-		//Perform colorspace conversion
-		frameColor = ct_transferColor(frame_color_transfer(2), outColorTransfer, frameColor);
-	}
-
-	//Obtain the resulting color
-	out_color = blend0*voidColor + blend1*frameColor + blend2*lineColor;
+	//Apply the border to it
+	out_color = border_smooth(
+		frameColor,			//Fill color
+		vec4(0.0f),			//Outter color
+		lineColor,			//Border color
+		lineWidth,			//Border width
+		lineSmoothness,		//Border smoothness
+		sDist				//Signed distance to the border
+	);
 
 	//Apply the opacity and bezier alpha to it
 	out_color.a *= opacity;

@@ -23,16 +23,19 @@ struct BezierCropImpl {
 		struct Vertex {
 			Vertex(	Math::Vec2f position, 
 					Math::Vec2f texCoord = Math::Vec2f(0, 0), 
-					Math::Vec3f klm = Math::Vec3f(-1, 0, 0) )
+					Math::Vec3f klm = Math::Vec3f(-1, -1, -1),
+					float dist = 0 )
 				: position(position)
 				, texCoord(texCoord)
 				, klm(klm)
+				, dist(dist)
 			{
 			}
 
 			Math::Vec2f position;
 			Math::Vec2f texCoord;
 			Math::Vec3f klm;
+			float		dist;
 		};
 
 		using Index = uint16_t;
@@ -360,7 +363,8 @@ struct BezierCropImpl {
 					vertexBufferData[i] = Vertex(
 						vertices[i].pos,
 						texCoord,
-						vertices[i].klm
+						vertices[i].klm,
+						vertices[i].dist
 					);
 				}
 
@@ -608,6 +612,12 @@ struct BezierCropImpl {
 					VERTEX_BUFFER_BINDING,
 					vk::Format::eR32G32B32Sfloat,
 					offsetof(Vertex, klm)
+				),
+				vk::VertexInputAttributeDescription(
+					3, //TODO
+					VERTEX_BUFFER_BINDING,
+					vk::Format::eR32Sfloat,
+					offsetof(Vertex, dist)
 				)
 			};
 
@@ -634,8 +644,8 @@ struct BezierCropImpl {
 				false, 												//Depth clamp enabled
 				false,												//Rasterizer discard enable
 				vk::PolygonMode::eFill,								//Polygon mode
-				vk::CullModeFlagBits::eNone, 						//Cull faces
-				vk::FrontFace::eCounterClockwise,					//Front face direction
+				vk::CullModeFlagBits::eBack, 						//Cull faces
+				vk::FrontFace::eClockwise,							//Front face direction
 				false, 0.0f, 0.0f, 0.0f,							//Depth bias
 				1.0f												//Line width
 			);
@@ -738,36 +748,14 @@ struct BezierCropImpl {
 		owner = static_cast<BezierCrop&>(base);
 	}
 
-	void open(ZuazoBase& base) {
+	void open(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
 		auto& bezierCrop = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &bezierCrop);
 		assert(!opened);
 
 		if(bezierCrop.getRenderPass() != Graphics::RenderPass()) {
-			opened = Utils::makeUnique<Open>(
-					bezierCrop.getInstance().getVulkan(),
-					getSize(),
-					bezierCrop.getScalingMode(),
-					getCrop(),
-					bezierCrop.getTransform(),
-					bezierCrop.getLineColor(),
-					bezierCrop.getLineWidth(),
-					bezierCrop.getLineSmoothness(),
-					bezierCrop.getOpacity()
-			);
-		}
-
-		assert(lastFrames.empty()); //Any hasChanged() should return true
-	}
-
-	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& bezierCrop = static_cast<BezierCrop&>(base);
-		assert(&owner.get() == &bezierCrop);
-		assert(!opened);
-		assert(lock.owns_lock());
-
-		if(bezierCrop.getRenderPass() != Graphics::RenderPass()) {
-			lock.unlock();
+			//Create in a unlocked environment
+			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
 					bezierCrop.getInstance().getVulkan(),
 					getSize(),
@@ -779,43 +767,44 @@ struct BezierCropImpl {
 					bezierCrop.getLineSmoothness(),
 					bezierCrop.getOpacity()
 			);
-			lock.lock();
+			if(lock) lock->lock();
 
+			//Write changes after locking back
 			opened = std::move(newOpened);
 		}
 
 		assert(lastFrames.empty()); //Any hasChanged() should return true
+	}
+
+	void asyncOpen(ZuazoBase& base, std::unique_lock<Instance>& lock) {
+		assert(lock.owns_lock());
+		open(base, &lock);
 		assert(lock.owns_lock());
 	}
 
 
-	void close(ZuazoBase& base) {
+	void close(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
 		auto& bezierCrop = static_cast<BezierCrop&>(base);
 		assert(&owner.get() == &bezierCrop); (void)(bezierCrop);
-		
+
+		//Write changes
 		videoIn.reset();
 		lastFrames.clear();
-		opened.reset();
+		auto oldOpened = std::move(opened);
+
+		//Destroy the object in a unlocked environment
+		if(oldOpened) {
+			if(lock) lock->unlock();
+			oldOpened.reset();
+			if(lock) lock->lock();
+		}
 
 		assert(!opened);
 	}
 
 	void asyncClose(ZuazoBase& base, std::unique_lock<Instance>& lock) {
-		auto& bezierCrop = static_cast<BezierCrop&>(base);
-		assert(&owner.get() == &bezierCrop); (void)(bezierCrop);
 		assert(lock.owns_lock());
-		
-		videoIn.reset();
-		lastFrames.clear();
-		auto oldOpened = std::move(opened);
-
-		if(oldOpened) {
-			lock.unlock();
-			oldOpened.reset();
-			lock.lock();
-		}
-
-		assert(!opened);
+		close(base, &lock);
 		assert(lock.owns_lock());
 	}
 
@@ -1055,9 +1044,9 @@ BezierCrop::BezierCrop(	Instance& instance,
 		std::move(name),
 		{ PadRef((*this)->videoIn) },
 		std::bind(&BezierCropImpl::moved, std::ref(**this), std::placeholders::_1),
-		std::bind(&BezierCropImpl::open, std::ref(**this), std::placeholders::_1),
+		std::bind(&BezierCropImpl::open, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&BezierCropImpl::asyncOpen, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&BezierCropImpl::close, std::ref(**this), std::placeholders::_1),
+		std::bind(&BezierCropImpl::close, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&BezierCropImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
 		renderer,
