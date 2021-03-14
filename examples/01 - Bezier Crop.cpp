@@ -212,7 +212,7 @@ int main(int argc, const char* argv[]) {
 	window.setLayers({bezierCrop});
 	bezierCrop.setScalingMode(Zuazo::ScalingMode::CROPPED);
 	bezierCrop.setScalingFilter(Zuazo::ScalingFilter::NEAREST);
-	bezierCrop.setLineWidth(0.0f);
+	//bezierCrop.setLineWidth(5.0f);
 	//bezierCrop.setLineSmoothness(4.0f);
 	bezierCrop.setLineColor(Zuazo::Math::Vec4f(1, 0, 1, 1));
 	bezierCrop.setOpacity(0.5f);

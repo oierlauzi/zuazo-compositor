@@ -23,19 +23,16 @@ struct BezierCropImpl {
 		struct Vertex {
 			Vertex(	Math::Vec2f position, 
 					Math::Vec2f texCoord = Math::Vec2f(0, 0), 
-					Math::Vec3f klm = Math::Vec3f(-1, -1, -1),
-					float dist = 0 )
+					Math::Vec3f klm = Math::Vec3f(-1, -1, -1) )
 				: position(position)
 				, texCoord(texCoord)
 				, klm(klm)
-				, dist(dist)
 			{
 			}
 
 			Math::Vec2f position;
 			Math::Vec2f texCoord;
 			Math::Vec3f klm;
-			float		dist;
 		};
 
 		using Index = uint16_t;
@@ -363,8 +360,7 @@ struct BezierCropImpl {
 					vertexBufferData[i] = Vertex(
 						vertices[i].pos,
 						texCoord,
-						vertices[i].klm,
-						vertices[i].dist
+						vertices[i].klm
 					);
 				}
 
@@ -612,12 +608,6 @@ struct BezierCropImpl {
 					VERTEX_BUFFER_BINDING,
 					vk::Format::eR32G32B32Sfloat,
 					offsetof(Vertex, klm)
-				),
-				vk::VertexInputAttributeDescription(
-					3, //TODO
-					VERTEX_BUFFER_BINDING,
-					vk::Format::eR32Sfloat,
-					offsetof(Vertex, dist)
 				)
 			};
 

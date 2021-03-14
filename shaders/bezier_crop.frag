@@ -10,7 +10,6 @@
 //Vertex I/O
 layout(location = 0) in vec2 in_texCoord;
 layout(location = 1) in vec3 in_klm;
-layout(location = 2) in float in_innerHull;
 
 layout(location = 0) out vec4 out_color;
 
@@ -33,7 +32,7 @@ frame_descriptor_set(2)
 
 void main() {
 	//Obtain th signed distance to the curve
-	const float sDist = min(bezier3_signed_distance(in_klm), bezier1_signed_distance(in_innerHull));
+	const float sDist = bezier3_signed_distance(in_klm);
 
 	//Sample the frame 
 	vec4 frameColor = frame_texture(2, in_texCoord);
