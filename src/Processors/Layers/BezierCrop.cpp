@@ -21,9 +21,9 @@ namespace Zuazo::Processors::Layers {
 struct BezierCropImpl {
 	struct Open {
 		struct Vertex {
-			Vertex(	Math::Vec2f position, 
-					Math::Vec2f texCoord = Math::Vec2f(0, 0), 
-					Math::Vec3f klm = Math::Vec3f(-1, -1, -1) )
+			Vertex(	const Math::Vec2f& position, 
+					const Math::Vec2f& texCoord = Math::Vec2f(0), 
+					const Math::Vec3f& klm = Math::Vec3f(-1) ) noexcept
 				: position(position)
 				, texCoord(texCoord)
 				, klm(klm)
@@ -147,17 +147,17 @@ struct BezierCropImpl {
 			resources->uniformBuffer.waitCompletion(vulkan);
 		}
 
-		void recreate(	Graphics::RenderPass renderPass,
-						BlendingMode blendingMode ) 
+		void recreate() 
 		{
-			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
+			
 		}
 
 		void draw(	Graphics::CommandBuffer& cmd, 
 					const Video& frame, 
 					ScalingFilter filter,
 					Graphics::RenderPass renderPass,
-					BlendingMode blendingMode ) 
+					BlendingMode blendingMode,
+					RenderingLayer renderingLayer ) 
 		{				
 			assert(resources);			
 			assert(frame);
@@ -180,7 +180,7 @@ struct BezierCropImpl {
 				resources->uniformBuffer.flush(vulkan);
 
 				//Configure the sampler for propper operation
-				configureSampler(*frame, filter, renderPass, blendingMode);
+				configureSampler(*frame, filter, renderPass, blendingMode, renderingLayer);
 				assert(frameDescriptorSetLayout);
 				assert(pipelineLayout);
 				assert(pipeline);
@@ -307,13 +307,25 @@ struct BezierCropImpl {
 		void configureSampler(	const Graphics::Frame& frame, 
 								ScalingFilter filter,
 								Graphics::RenderPass renderPass,
-								BlendingMode blendingMode ) 
+								BlendingMode blendingMode,
+								RenderingLayer renderingLayer ) 
 		{
 			const auto newDescriptorSetLayout = frame.getDescriptorSetLayout(filter);
 			if(frameDescriptorSetLayout != newDescriptorSetLayout) {
 				frameDescriptorSetLayout = newDescriptorSetLayout;
+
+				//Recreate stuff
 				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
-				recreate(renderPass, blendingMode);
+				auto newPipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
+
+				//Write changes
+				if(pipeline.use_count() == 1) {
+					//Pipeline is not shared. Its safe to overwrite
+					*pipeline = std::move(newPipeline);
+				} else {
+					//Pipeline shared by others or not created. Create a new one
+					pipeline = Utils::makeShared<vk::UniquePipeline>(std::move(newPipeline));
+				}
 			}
 		}
 
@@ -479,7 +491,7 @@ struct BezierCropImpl {
 
 		static Utils::BufferView<const std::pair<uint32_t, size_t>> getUniformBufferSizes() noexcept {
 			static const std::array uniformBufferSizes = {
-				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(glm::mat4) ),
+				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(Math::Mat4x4f) ),
 				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_LAYERDATA,		LAYERDATA_UNIFORM_LAYOUT.back().end() )
 			};
 
@@ -543,7 +555,8 @@ struct BezierCropImpl {
 		static vk::UniquePipeline createPipeline(	const Graphics::Vulkan& vulkan,
 													vk::PipelineLayout layout,
 													Graphics::RenderPass renderPass,
-													BlendingMode blendingMode )
+													BlendingMode blendingMode,
+													RenderingLayer renderingLayer )
 		{
 			static //So that its ptr can be used as an identifier
 			#include <bezier_crop_vert.h>
@@ -634,7 +647,7 @@ struct BezierCropImpl {
 				false, 												//Depth clamp enabled
 				false,												//Rasterizer discard enable
 				vk::PolygonMode::eFill,								//Polygon mode
-				vk::CullModeFlagBits::eBack, 						//Cull faces
+				vk::CullModeFlagBits::eNone, 						//Cull faces
 				vk::FrontFace::eClockwise,							//Front face direction
 				false, 0.0f, 0.0f, 0.0f,							//Depth bias
 				1.0f												//Line width
@@ -648,18 +661,10 @@ struct BezierCropImpl {
 				false, false										//Alpha to coverage, alpha to 1 enable
 			);
 
-			constexpr vk::PipelineDepthStencilStateCreateInfo depthStencil(
-				{},													//Flags
-				true, true, 										//Depth test enable, write
-				vk::CompareOp::eLessOrEqual,						//Depth compare op
-				false,												//Depth bounds test
-				false, 												//Stencil enabled
-				{}, {},												//Stencil operation state front, back
-				0.0f, 0.0f											//min, max depth bounds
-			);
+			const auto depthStencil = Graphics::getDepthStencilConfiguration(renderingLayer);
 
 			const std::array colorBlendAttachments = {
-				Graphics::toVulkan(blendingMode)
+				Graphics::getBlendingConfiguration(blendingMode)
 			};
 
 			const vk::PipelineColorBlendStateCreateInfo colorBlend(
@@ -836,7 +841,8 @@ struct BezierCropImpl {
 					frame, 
 					bezierCrop.getScalingFilter(),
 					bezierCrop.getRenderPass(),
-					bezierCrop.getBlendingMode()
+					bezierCrop.getBlendingMode(),
+					bezierCrop.getRenderingLayer()
 				);
 			}
 
@@ -870,6 +876,11 @@ struct BezierCropImpl {
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
 		auto& bezierCrop = static_cast<BezierCrop&>(base);
 		recreateCallback(bezierCrop, bezierCrop.getRenderPass(), mode);
+	}
+
+	void renderingLayerCallback(LayerBase& base, RenderingLayer) {
+		auto& bezierCrop = static_cast<BezierCrop&>(base);
+		recreateCallback(bezierCrop, bezierCrop.getRenderPass(), bezierCrop.getBlendingMode());
 	}
 
 	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
@@ -914,6 +925,7 @@ struct BezierCropImpl {
 
 
 	void setCrop(Utils::BufferView<const BezierCrop::BezierLoop> crop) {
+		this->crop.clear();
 		this->crop.insert(this->crop.cend(), crop.cbegin(), crop.cend());
 
 		if(opened) {
@@ -991,27 +1003,14 @@ private:
 
 			if(opened && isValid) {
 				//It remains valid
-				opened->recreate(
-					renderPass,
-					blendingMode
-				);
+				opened->recreate();
 			} else if(opened && !isValid) {
 				//It has become invalid
 				videoIn.reset();
 				opened.reset();
 			} else if(!opened && isValid) {
 				//It has become valid
-				opened = Utils::makeUnique<Open>(
-					bezierCrop.getInstance().getVulkan(),
-					getSize(),
-					bezierCrop.getScalingMode(),
-					getCrop(),
-					bezierCrop.getTransform(),
-					bezierCrop.getLineColor(),
-					bezierCrop.getLineWidth(),
-					bezierCrop.getLineSmoothness(),
-					bezierCrop.getOpacity()
-				);
+				open(bezierCrop, nullptr);
 			}
 
 			lastFrames.clear(); //Will force hasChanged() to true
@@ -1043,6 +1042,7 @@ BezierCrop::BezierCrop(	Instance& instance,
 		std::bind(&BezierCropImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::renderingLayerCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
 		std::bind(&BezierCropImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )

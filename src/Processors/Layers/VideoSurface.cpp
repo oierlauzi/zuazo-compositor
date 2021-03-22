@@ -108,17 +108,18 @@ struct VideoSurfaceImpl {
 			resources->uniformBuffer.waitCompletion(vulkan);
 		}
 
-		void recreate(	Graphics::RenderPass renderPass,
-						BlendingMode blendingMode ) 
+		void recreate() 
 		{
-			pipeline = Utils::makeShared<vk::UniquePipeline>(createPipeline(vulkan, pipelineLayout, renderPass, blendingMode));
+			//This will enforce recreation when the next frame is rendered
+			frameDescriptorSetLayout = nullptr;
 		}
 
 		void draw(	Graphics::CommandBuffer& cmd, 
 					const Video& frame, 
 					ScalingFilter filter,
 					Graphics::RenderPass renderPass,
-					BlendingMode blendingMode ) 
+					BlendingMode blendingMode,
+					RenderingLayer renderingLayer ) 
 		{				
 			assert(resources);			
 			assert(frame);
@@ -149,7 +150,7 @@ struct VideoSurfaceImpl {
 			resources->uniformBuffer.flush(vulkan);
 
 			//Configure the sampler for propper operation
-			configureSampler(*frame, filter, renderPass, blendingMode);
+			configureSampler(*frame, filter, renderPass, blendingMode, renderingLayer);
 			assert(frameDescriptorSetLayout);
 			assert(pipelineLayout);
 			assert(pipeline);
@@ -221,13 +222,25 @@ struct VideoSurfaceImpl {
 		void configureSampler(	const Graphics::Frame& frame, 
 								ScalingFilter filter,
 								Graphics::RenderPass renderPass,
-								BlendingMode blendingMode ) 
+								BlendingMode blendingMode,
+								RenderingLayer renderingLayer ) 
 		{
 			const auto newDescriptorSetLayout = frame.getDescriptorSetLayout(filter);
 			if(frameDescriptorSetLayout != newDescriptorSetLayout) {
 				frameDescriptorSetLayout = newDescriptorSetLayout;
+
+				//Recreate stuff
 				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
-				recreate(renderPass, blendingMode);
+				auto newPipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
+
+				//Write changes
+				if(pipeline.use_count() == 1) {
+					//Pipeline is not shared. Its safe to overwrite
+					*pipeline = std::move(newPipeline);
+				} else {
+					//Pipeline shared by others or not created. Create a new one
+					pipeline = Utils::makeShared<vk::UniquePipeline>(std::move(newPipeline));
+				}
 			}
 		}
 
@@ -277,7 +290,7 @@ struct VideoSurfaceImpl {
 
 		static Utils::BufferView<const std::pair<uint32_t, size_t>> getUniformBufferSizes() noexcept {
 			static const std::array uniformBufferSizes = {
-				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(glm::mat4) ),
+				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_MODEL_MATRIX, 	sizeof(Math::Mat4x4f) ),
 				std::make_pair<uint32_t, size_t>(DESCRIPTOR_BINDING_LAYERDATA,		LAYERDATA_UNIFORM_LAYOUT.back().end() )
 			};
 
@@ -341,7 +354,8 @@ struct VideoSurfaceImpl {
 		static vk::UniquePipeline createPipeline(	const Graphics::Vulkan& vulkan,
 													vk::PipelineLayout layout,
 													Graphics::RenderPass renderPass,
-													BlendingMode blendingMode )
+													BlendingMode blendingMode,
+													RenderingLayer renderingLayer )
 		{
 			static //So that its ptr can be used as an identifier
 			#include <video_surface_vert.h>
@@ -440,18 +454,10 @@ struct VideoSurfaceImpl {
 				false, false										//Alpha to coverage, alpha to 1 enable
 			);
 
-			constexpr vk::PipelineDepthStencilStateCreateInfo depthStencil(
-				{},													//Flags
-				true, true, 										//Depth test enable, write
-				vk::CompareOp::eLessOrEqual,						//Depth compare op
-				false,												//Depth bounds test
-				false, 												//Stencil enabled
-				{}, {},												//Stencil operation state front, back
-				0.0f, 0.0f											//min, max depth bounds
-			);
+			const auto depthStencil = Graphics::getDepthStencilConfiguration(renderingLayer);
 
 			const std::array colorBlendAttachments = {
-				Graphics::toVulkan(blendingMode)
+				Graphics::getBlendingConfiguration(blendingMode)
 			};
 
 			const vk::PipelineColorBlendStateCreateInfo colorBlend(
@@ -614,7 +620,8 @@ struct VideoSurfaceImpl {
 					frame, 
 					videoSurface.getScalingFilter(),
 					videoSurface.getRenderPass(),
-					videoSurface.getBlendingMode()
+					videoSurface.getBlendingMode(),
+					videoSurface.getRenderingLayer()
 				);
 			}
 
@@ -648,6 +655,11 @@ struct VideoSurfaceImpl {
 	void blendingModeCallback(LayerBase& base, BlendingMode mode) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		recreateCallback(videoSurface, videoSurface.getRenderPass(), mode);
+	}
+
+	void renderingLayerCallback(LayerBase& base, RenderingLayer) {
+		auto& videoSurface = static_cast<VideoSurface&>(base);
+		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getBlendingMode());
 	}
 
 	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
@@ -703,23 +715,14 @@ private:
 
 			if(opened && isValid) {
 				//It remains valid
-				opened->recreate(
-					renderPass,
-					blendingMode
-				);
+				opened->recreate();
 			} else if(opened && !isValid) {
 				//It has become invalid
 				videoIn.reset();
 				opened.reset();
 			} else if(!opened && isValid) {
 				//It has become valid
-				opened = Utils::makeUnique<Open>(
-					videoSurface.getInstance().getVulkan(),
-					getSize(),
-					videoSurface.getScalingMode(),
-					videoSurface.getTransform(),
-					videoSurface.getOpacity()
-				);
+				open(videoSurface, nullptr);
 			}
 
 			lastFrames.clear(); //Will force hasChanged() to true
@@ -750,6 +753,7 @@ VideoSurface::VideoSurface(	Instance& instance,
 		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::renderingLayerCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
 		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )

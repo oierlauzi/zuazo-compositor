@@ -118,7 +118,7 @@ int main(int argc, const char* argv[]) {
 		5.0f*Zuazo::Math::Vec2f(15,-30)
 	};
 
-	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 4> BRIDGE_POINTS = {
+	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 4> ARC_POINTS = {
 		5.0f*Zuazo::Math::Vec2f(0,0),
 		5.0f*Zuazo::Math::Vec2f(50,-60),
 		5.0f*Zuazo::Math::Vec2f(70,-60),
@@ -131,6 +131,69 @@ int main(int argc, const char* argv[]) {
 		5.0f*Zuazo::Math::Vec2f(0,20),
 		5.0f*Zuazo::Math::Vec2f(0,15),
 		5.0f*Zuazo::Math::Vec2f(0,5)
+	};
+
+	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 20> PSI_POINTS = {
+		Zuazo::Math::Vec2f(-78,-176),
+		Zuazo::Math::Vec2f(-78,-172.66667),
+		Zuazo::Math::Vec2f(-78,-169.33333),
+		Zuazo::Math::Vec2f(-78,-166),
+		Zuazo::Math::Vec2f(-28,-166),
+		Zuazo::Math::Vec2f(-28,-166),
+		Zuazo::Math::Vec2f(-28,-116),
+		Zuazo::Math::Vec2f(-28,-73.333333),
+		Zuazo::Math::Vec2f(-28,-30.666667),
+		Zuazo::Math::Vec2f(-28,12),
+		Zuazo::Math::Vec2f(-183,12),
+		Zuazo::Math::Vec2f(-48,-178),
+		Zuazo::Math::Vec2f(-193,-176),
+		Zuazo::Math::Vec2f(-193,-172.66667),
+		Zuazo::Math::Vec2f(-193,-169.33333),
+		Zuazo::Math::Vec2f(-193,-166),
+		Zuazo::Math::Vec2f(-123,-166),
+		Zuazo::Math::Vec2f(-243,34),
+		Zuazo::Math::Vec2f(-28,34),
+		Zuazo::Math::Vec2f(-28,64),
+		Zuazo::Math::Vec2f(-28,94),
+		Zuazo::Math::Vec2f(-28,124),
+		Zuazo::Math::Vec2f(-28,159),
+		Zuazo::Math::Vec2f(-28,170),
+		Zuazo::Math::Vec2f(-78,170),
+		Zuazo::Math::Vec2f(-78,173.33333),
+		Zuazo::Math::Vec2f(-78,176.66667),
+		Zuazo::Math::Vec2f(-78,180),
+		Zuazo::Math::Vec2f(-26,180),
+		Zuazo::Math::Vec2f(26,180),
+		Zuazo::Math::Vec2f(78,180),
+		Zuazo::Math::Vec2f(78,176.66667),
+		Zuazo::Math::Vec2f(78,173.33333),
+		Zuazo::Math::Vec2f(78,170),
+		Zuazo::Math::Vec2f(28,170),
+		Zuazo::Math::Vec2f(28,159),
+		Zuazo::Math::Vec2f(28,124),
+		Zuazo::Math::Vec2f(28,94),
+		Zuazo::Math::Vec2f(28,64),
+		Zuazo::Math::Vec2f(28,34),
+		Zuazo::Math::Vec2f(243,34),
+		Zuazo::Math::Vec2f(123,-166),
+		Zuazo::Math::Vec2f(193,-166),
+		Zuazo::Math::Vec2f(193,-169.33333),
+		Zuazo::Math::Vec2f(193,-172.66667),
+		Zuazo::Math::Vec2f(193,-176),
+		Zuazo::Math::Vec2f(48,-178),
+		Zuazo::Math::Vec2f(183,12),
+		Zuazo::Math::Vec2f(28,12),
+		Zuazo::Math::Vec2f(28,-30.666667),
+		Zuazo::Math::Vec2f(28,-73.333333),
+		Zuazo::Math::Vec2f(28,-116),
+		Zuazo::Math::Vec2f(28,-166),
+		Zuazo::Math::Vec2f(28,-166),
+		Zuazo::Math::Vec2f(78,-166),
+		Zuazo::Math::Vec2f(78,-169.33333),
+		Zuazo::Math::Vec2f(78,-172.66667),
+		Zuazo::Math::Vec2f(78,-176),
+		Zuazo::Math::Vec2f(26,-176),
+		Zuazo::Math::Vec2f(-26,-176),
 	};
 
 	const std::array<std::array<Zuazo::Math::Vec2f, 3>, 10> BLOB_POINTS = {
@@ -198,7 +261,7 @@ int main(int argc, const char* argv[]) {
 
 	//Create a bezier loop with the points
 	Zuazo::Math::Vec2f loopSize;
-	auto loop = createLoop(BRIDGE_POINTS, loopSize);
+	auto loop = createLoop(PSI_POINTS, loopSize);
 
 	//Create a layer for rendering to the window
 	Zuazo::Processors::Layers::BezierCrop bezierCrop(
