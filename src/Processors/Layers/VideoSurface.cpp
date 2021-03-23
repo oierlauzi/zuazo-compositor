@@ -3,6 +3,7 @@
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
 #include <zuazo/Utils/StaticId.h>
+#include <zuazo/Utils/Hasher.h>
 #include <zuazo/Utils/Pool.h>
 #include <zuazo/Graphics/StagedBuffer.h>
 #include <zuazo/Graphics/UniformBuffer.h>
@@ -81,7 +82,7 @@ struct VideoSurfaceImpl {
 
 		vk::DescriptorSetLayout								frameDescriptorSetLayout;
 		vk::PipelineLayout									pipelineLayout;
-		std::shared_ptr<vk::UniquePipeline>					pipeline;
+		vk::Pipeline										pipeline;
 
 		Open(	const Graphics::Vulkan& vulkan,
 				Math::Vec2f size,
@@ -154,10 +155,9 @@ struct VideoSurfaceImpl {
 			assert(frameDescriptorSetLayout);
 			assert(pipelineLayout);
 			assert(pipeline);
-			assert(*pipeline);
 
 			//Bind the pipeline and its descriptor sets
-			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **pipeline);
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 
 			cmd.bindVertexBuffers(
 				VERTEX_BUFFER_BINDING,											//Binding
@@ -189,7 +189,7 @@ struct VideoSurfaceImpl {
 			);
 
 			//Add the dependencies to the command buffer
-			cmd.addDependencies({ resources, pipeline, frame });			
+			cmd.addDependencies({ resources, frame });			
 		}
 
 		void updateModelMatrixUniform(const Math::Transformf& transform) {
@@ -231,16 +231,7 @@ struct VideoSurfaceImpl {
 
 				//Recreate stuff
 				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
-				auto newPipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
-
-				//Write changes
-				if(pipeline.use_count() == 1) {
-					//Pipeline is not shared. Its safe to overwrite
-					*pipeline = std::move(newPipeline);
-				} else {
-					//Pipeline shared by others or not created. Create a new one
-					pipeline = Utils::makeShared<vk::UniquePipeline>(std::move(newPipeline));
-				}
+				pipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
 			}
 		}
 
@@ -351,151 +342,168 @@ struct VideoSurfaceImpl {
 			return result;
 		}
 
-		static vk::UniquePipeline createPipeline(	const Graphics::Vulkan& vulkan,
+		static vk::Pipeline createPipeline(	const Graphics::Vulkan& vulkan,
 													vk::PipelineLayout layout,
 													Graphics::RenderPass renderPass,
 													BlendingMode blendingMode,
 													RenderingLayer renderingLayer )
 		{
-			static //So that its ptr can be used as an identifier
-			#include <video_surface_vert.h>
-			const size_t vertId = reinterpret_cast<uintptr_t>(video_surface_vert);
-			static
-			#include <video_surface_frag.h>
-			const size_t fragId = reinterpret_cast<uintptr_t>(video_surface_frag);
+			using Index = std::tuple<	vk::PipelineLayout,
+										vk::RenderPass,
+										BlendingMode,
+										RenderingLayer >;
+			static std::unordered_map<Index, const Utils::StaticId, Utils::Hasher<Index>> ids;
 
-			//Try to retrive modules from cache
-			auto vertexShader = vulkan.createShaderModule(vertId);
-			if(!vertexShader) {
-				//Modules isn't in cache. Create it
-				vertexShader = vulkan.createShaderModule(vertId, video_surface_vert);
+			//Obtain the id related to the configuration
+			Index index(layout, renderPass.get(), blendingMode, renderingLayer);
+			const auto& id = ids[index];
+
+			//Try to obtain it from cache
+			auto result = vulkan.createGraphicsPipeline(id);
+			if(!result) {
+				//No luck, we need to create it
+				static //So that its ptr can be used as an identifier
+				#include <video_surface_vert.h>
+				const size_t vertId = reinterpret_cast<uintptr_t>(video_surface_vert);
+				static
+				#include <video_surface_frag.h>
+				const size_t fragId = reinterpret_cast<uintptr_t>(video_surface_frag);
+
+				//Try to retrive modules from cache
+				auto vertexShader = vulkan.createShaderModule(vertId);
+				if(!vertexShader) {
+					//Modules isn't in cache. Create it
+					vertexShader = vulkan.createShaderModule(vertId, video_surface_vert);
+				}
+
+				auto fragmentShader = vulkan.createShaderModule(fragId);
+				if(!fragmentShader) {
+					//Modules isn't in cache. Create it
+					fragmentShader = vulkan.createShaderModule(fragId, video_surface_frag);
+				}
+
+				assert(vertexShader);
+				assert(fragmentShader);
+
+				constexpr auto SHADER_ENTRY_POINT = "main";
+				const std::array shaderStages = {
+					vk::PipelineShaderStageCreateInfo(		
+						{},												//Flags
+						vk::ShaderStageFlagBits::eVertex,				//Shader type
+						vertexShader,									//Shader handle
+						SHADER_ENTRY_POINT ),							//Shader entry point
+					vk::PipelineShaderStageCreateInfo(		
+						{},												//Flags
+						vk::ShaderStageFlagBits::eFragment,				//Shader type
+						fragmentShader,									//Shader handle
+						SHADER_ENTRY_POINT ),							//Shader entry point
+				};
+
+				constexpr std::array vertexBindings = {
+					vk::VertexInputBindingDescription(
+						VERTEX_BUFFER_BINDING,
+						sizeof(Vertex),
+						vk::VertexInputRate::eVertex
+					)
+				};
+
+				constexpr std::array vertexAttributes = {
+					vk::VertexInputAttributeDescription(
+						VERTEX_LOCATION_POSITION,
+						VERTEX_BUFFER_BINDING,
+						vk::Format::eR32G32Sfloat,
+						offsetof(Vertex, position)
+					),
+					vk::VertexInputAttributeDescription(
+						VERTEX_LOCATION_TEXCOORD,
+						VERTEX_BUFFER_BINDING,
+						vk::Format::eR32G32Sfloat,
+						offsetof(Vertex, texCoord)
+					)
+				};
+
+				const vk::PipelineVertexInputStateCreateInfo vertexInput(
+					{},
+					vertexBindings.size(), vertexBindings.data(),		//Vertex bindings
+					vertexAttributes.size(), vertexAttributes.data()	//Vertex attributes
+				);
+
+				constexpr vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
+					{},													//Flags
+					vk::PrimitiveTopology::eTriangleStrip,				//Topology
+					false												//Restart enable
+				);
+
+				constexpr vk::PipelineViewportStateCreateInfo viewport(
+					{},													//Flags
+					1, nullptr,											//Viewports (dynamic)
+					1, nullptr											//Scissors (dynamic)
+				);
+
+				constexpr vk::PipelineRasterizationStateCreateInfo rasterizer(
+					{},													//Flags
+					false, 												//Depth clamp enabled
+					false,												//Rasterizer discard enable
+					vk::PolygonMode::eFill,								//Polygon mode
+					vk::CullModeFlagBits::eNone, 						//Cull faces
+					vk::FrontFace::eClockwise,							//Front face direction
+					false, 0.0f, 0.0f, 0.0f,							//Depth bias
+					1.0f												//Line width
+				);
+
+				constexpr vk::PipelineMultisampleStateCreateInfo multisample(
+					{},													//Flags
+					vk::SampleCountFlagBits::e1,						//Sample count
+					false, 1.0f,										//Sample shading enable, min sample shading
+					nullptr,											//Sample mask
+					false, false										//Alpha to coverage, alpha to 1 enable
+				);
+
+				const auto depthStencil = Graphics::getDepthStencilConfiguration(renderingLayer);
+
+				const std::array colorBlendAttachments = {
+					Graphics::getBlendingConfiguration(blendingMode)
+				};
+
+				const vk::PipelineColorBlendStateCreateInfo colorBlend(
+					{},													//Flags
+					false,												//Enable logic operation
+					vk::LogicOp::eCopy,									//Logic operation
+					colorBlendAttachments.size(), colorBlendAttachments.data() //Blend attachments
+				);
+
+				constexpr std::array dynamicStates = {
+					vk::DynamicState::eViewport,
+					vk::DynamicState::eScissor
+				};
+
+				const vk::PipelineDynamicStateCreateInfo dynamicState(
+					{},													//Flags
+					dynamicStates.size(), dynamicStates.data()			//Dynamic states
+				);
+
+				const vk::GraphicsPipelineCreateInfo createInfo(
+					{},													//Flags
+					shaderStages.size(), shaderStages.data(),			//Shader stages
+					&vertexInput,										//Vertex input
+					&inputAssembly,										//Vertex assembly
+					nullptr,											//Tesselation
+					&viewport,											//Viewports
+					&rasterizer,										//Rasterizer
+					&multisample,										//Multisampling
+					&depthStencil,										//Depth / Stencil tests
+					&colorBlend,										//Color blending
+					&dynamicState,										//Dynamic states
+					layout,												//Pipeline layout
+					renderPass.get(), 0,								//Renderpasses
+					nullptr, 0											//Inherit
+				);
+
+				result = vulkan.createGraphicsPipeline(id, createInfo);
 			}
 
-			auto fragmentShader = vulkan.createShaderModule(fragId);
-			if(!fragmentShader) {
-				//Modules isn't in cache. Create it
-				fragmentShader = vulkan.createShaderModule(fragId, video_surface_frag);
-			}
-
-			assert(vertexShader);
-			assert(fragmentShader);
-
-			constexpr auto SHADER_ENTRY_POINT = "main";
-			const std::array shaderStages = {
-				vk::PipelineShaderStageCreateInfo(		
-					{},												//Flags
-					vk::ShaderStageFlagBits::eVertex,				//Shader type
-					vertexShader,									//Shader handle
-					SHADER_ENTRY_POINT ),							//Shader entry point
-				vk::PipelineShaderStageCreateInfo(		
-					{},												//Flags
-					vk::ShaderStageFlagBits::eFragment,				//Shader type
-					fragmentShader,									//Shader handle
-					SHADER_ENTRY_POINT ),							//Shader entry point
-			};
-
-			constexpr std::array vertexBindings = {
-				vk::VertexInputBindingDescription(
-					VERTEX_BUFFER_BINDING,
-					sizeof(Vertex),
-					vk::VertexInputRate::eVertex
-				)
-			};
-
-			constexpr std::array vertexAttributes = {
-				vk::VertexInputAttributeDescription(
-					VERTEX_LOCATION_POSITION,
-					VERTEX_BUFFER_BINDING,
-					vk::Format::eR32G32Sfloat,
-					offsetof(Vertex, position)
-				),
-				vk::VertexInputAttributeDescription(
-					VERTEX_LOCATION_TEXCOORD,
-					VERTEX_BUFFER_BINDING,
-					vk::Format::eR32G32Sfloat,
-					offsetof(Vertex, texCoord)
-				)
-			};
-
-			const vk::PipelineVertexInputStateCreateInfo vertexInput(
-				{},
-				vertexBindings.size(), vertexBindings.data(),		//Vertex bindings
-				vertexAttributes.size(), vertexAttributes.data()	//Vertex attributes
-			);
-
-			constexpr vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
-				{},													//Flags
-				vk::PrimitiveTopology::eTriangleStrip,				//Topology
-				false												//Restart enable
-			);
-
-			constexpr vk::PipelineViewportStateCreateInfo viewport(
-				{},													//Flags
-				1, nullptr,											//Viewports (dynamic)
-				1, nullptr											//Scissors (dynamic)
-			);
-
-			constexpr vk::PipelineRasterizationStateCreateInfo rasterizer(
-				{},													//Flags
-				false, 												//Depth clamp enabled
-				false,												//Rasterizer discard enable
-				vk::PolygonMode::eFill,								//Polygon mode
-				vk::CullModeFlagBits::eNone, 						//Cull faces
-				vk::FrontFace::eClockwise,							//Front face direction
-				false, 0.0f, 0.0f, 0.0f,							//Depth bias
-				1.0f												//Line width
-			);
-
-			constexpr vk::PipelineMultisampleStateCreateInfo multisample(
-				{},													//Flags
-				vk::SampleCountFlagBits::e1,						//Sample count
-				false, 1.0f,										//Sample shading enable, min sample shading
-				nullptr,											//Sample mask
-				false, false										//Alpha to coverage, alpha to 1 enable
-			);
-
-			const auto depthStencil = Graphics::getDepthStencilConfiguration(renderingLayer);
-
-			const std::array colorBlendAttachments = {
-				Graphics::getBlendingConfiguration(blendingMode)
-			};
-
-			const vk::PipelineColorBlendStateCreateInfo colorBlend(
-				{},													//Flags
-				false,												//Enable logic operation
-				vk::LogicOp::eCopy,									//Logic operation
-				colorBlendAttachments.size(), colorBlendAttachments.data() //Blend attachments
-			);
-
-			constexpr std::array dynamicStates = {
-				vk::DynamicState::eViewport,
-				vk::DynamicState::eScissor
-			};
-
-			const vk::PipelineDynamicStateCreateInfo dynamicState(
-				{},													//Flags
-				dynamicStates.size(), dynamicStates.data()			//Dynamic states
-			);
-
-			static const Utils::StaticId pipelineId;
-			const vk::GraphicsPipelineCreateInfo createInfo(
-				{},													//Flags
-				shaderStages.size(), shaderStages.data(),			//Shader stages
-				&vertexInput,										//Vertex input
-				&inputAssembly,										//Vertex assembly
-				nullptr,											//Tesselation
-				&viewport,											//Viewports
-				&rasterizer,										//Rasterizer
-				&multisample,										//Multisampling
-				&depthStencil,										//Depth / Stencil tests
-				&colorBlend,										//Color blending
-				&dynamicState,										//Dynamic states
-				layout,												//Pipeline layout
-				renderPass.get(), 0,								//Renderpasses
-				nullptr, static_cast<uint32_t>(pipelineId)			//Inherit
-			);
-
-			return vulkan.createGraphicsPipeline(createInfo);
+			assert(result);
+			return result;
 		}
 
 	};
