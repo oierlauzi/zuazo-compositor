@@ -316,6 +316,7 @@ struct CompositorImpl {
 
 			//Write changes after locking back
 			opened = std::move(newOpened);
+			compositor.setViewportSize(opened->drawtable.getFrameDescriptor().calculateSize());
 		}
 
 		hasChanged = true; //Signal rendering if needed
@@ -418,6 +419,9 @@ struct CompositorImpl {
 					depthStencilFormat.value(),
 					compositor.getCamera()
 				);
+
+				//Update the size
+				compositor.setViewportSize(opened->drawtable.getFrameDescriptor().calculateSize());
 			} else if(opened && !isValid) {
 				//Video mode is not valid anymore
 				opened.reset();
