@@ -815,24 +815,46 @@ struct BezierCropImpl {
 		const auto& bezierCrop = static_cast<const BezierCrop&>(base);
 		assert(&owner.get() == &bezierCrop); (void)(bezierCrop);
 
+		bool result;
+
 		const auto ite = lastFrames.find(&renderer);
 		if(ite == lastFrames.cend()) {
 			//There is no frame previously rendered for this renderer
-			return true;
-		}
-
-		if(ite->second != videoIn.getLastElement()) {
+			result = true;
+		} else if(ite->second != videoIn.getLastElement()) {
 			//A new frame has arrived since the last rendered one at this renderer
-			return true;
-		}
-
-		if(videoIn.hasChanged()) {
+			result = true;
+		} else if(videoIn.hasChanged()) {
 			//A new frame is available
-			return true;
+			result = true;
+		} else {
+			//Nothing has changed :-)
+			result = false;
 		}
 
-		//Nothing has changed :-)
-		return false;
+		return result;
+	}
+
+	bool hasAlphaCallback(const LayerBase& base) const noexcept {
+		const auto& bezierCrop = static_cast<const BezierCrop&>(base);
+		assert(&owner.get() == &bezierCrop); (void)(bezierCrop);
+
+		bool result;
+
+		//HACK using last element instead of pull for optimization reasons.
+		//If changing from a alpha-less format to a alpha-ed format, a frame
+		//with potential incorrect ordering will be rendered once. 
+		const auto& lastElement = videoIn.getLastElement();
+
+		if(lastElement) {
+			result = Zuazo::hasAlpha(lastElement->getDescriptor().getColorFormat());
+		} else {
+			//No frame. Nothing will be rendered
+			result = false;
+		}
+
+
+		return result;
 	}
 
 	void drawCallback(const LayerBase& base, const RendererBase& renderer, Graphics::CommandBuffer& cmd) {
@@ -1052,6 +1074,7 @@ BezierCrop::BezierCrop(	Instance& instance,
 		std::bind(&BezierCropImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::renderingLayerCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&BezierCropImpl::hasAlphaCallback, std::ref(**this), std::placeholders::_1),
 		std::bind(&BezierCropImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
 		std::bind(&BezierCropImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, VideoScalerBase(

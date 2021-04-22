@@ -22,9 +22,7 @@ class Compositor
 	friend CompositorImpl;
 public:
 	Compositor(	Instance& instance, 
-				std::string name, 
-				VideoMode videoMode = VideoMode::ANY,
-				Utils::Limit<DepthStencilFormat> depthStencil = Utils::Any<DepthStencilFormat>() );
+				std::string name );
 	Compositor(const Compositor& other) = delete;
 	Compositor(Compositor&& other);
 	virtual ~Compositor();

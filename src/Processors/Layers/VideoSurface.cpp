@@ -391,12 +391,16 @@ struct VideoSurfaceImpl {
 						{},												//Flags
 						vk::ShaderStageFlagBits::eVertex,				//Shader type
 						vertexShader,									//Shader handle
-						SHADER_ENTRY_POINT ),							//Shader entry point
+						SHADER_ENTRY_POINT,								//Shader entry point
+						nullptr 										//Specialization
+					),
 					vk::PipelineShaderStageCreateInfo(		
 						{},												//Flags
 						vk::ShaderStageFlagBits::eFragment,				//Shader type
 						fragmentShader,									//Shader handle
-						SHADER_ENTRY_POINT ),							//Shader entry point
+						SHADER_ENTRY_POINT,								//Shader entry point
+						nullptr 										//Specialization
+					),
 				};
 
 				constexpr std::array vertexBindings = {
@@ -594,24 +598,46 @@ struct VideoSurfaceImpl {
 		const auto& videoSurface = static_cast<const VideoSurface&>(base);
 		assert(&owner.get() == &videoSurface); (void)(videoSurface);
 
+		bool result;
+
 		const auto ite = lastFrames.find(&renderer);
 		if(ite == lastFrames.cend()) {
 			//There is no frame previously rendered for this renderer
-			return true;
-		}
-
-		if(ite->second != videoIn.getLastElement()) {
+			result = true;
+		} else if(ite->second != videoIn.getLastElement()) {
 			//A new frame has arrived since the last rendered one at this renderer
-			return true;
-		}
-
-		if(videoIn.hasChanged()) {
+			result = true;
+		} else if(videoIn.hasChanged()) {
 			//A new frame is available
-			return true;
+			result = true;
+		} else {
+			//Nothing has changed :-)
+			result = false;
 		}
 
-		//Nothing has changed :-)
-		return false;
+		return result;
+	}
+
+	bool hasAlphaCallback(const LayerBase& base) const noexcept {
+		const auto& videoSurface = static_cast<const VideoSurface&>(base);
+		assert(&owner.get() == &videoSurface); (void)(videoSurface);
+
+		bool result;
+
+		//HACK using last element instead of pull for optimization reasons.
+		//If changing from a alpha-less format to a alpha-ed format, a frame
+		//with potential incorrect ordering will be rendered once. 
+		const auto& lastElement = videoIn.getLastElement();
+
+		if(lastElement) {
+			result = Zuazo::hasAlpha(lastElement->getDescriptor().getColorFormat());
+		} else {
+			//No frame. Nothing will be rendered
+			result = false;
+		}
+
+
+		return result;
 	}
 
 	void drawCallback(const LayerBase& base, const RendererBase& renderer, Graphics::CommandBuffer& cmd) {
@@ -763,6 +789,7 @@ VideoSurface::VideoSurface(	Instance& instance,
 		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::renderingLayerCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::hasChangedCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
+		std::bind(&VideoSurfaceImpl::hasAlphaCallback, std::ref(**this), std::placeholders::_1),
 		std::bind(&VideoSurfaceImpl::drawCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
 		std::bind(&VideoSurfaceImpl::renderPassCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, VideoScalerBase(

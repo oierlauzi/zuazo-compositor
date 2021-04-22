@@ -303,13 +303,13 @@ struct CompositorImpl {
 		assert(&owner.get() == &compositor);
 		assert(!opened);
 
-		if(static_cast<bool>(compositor.getVideoMode()) && static_cast<bool>(compositor.getDepthStencilFormat())) {
+		if(static_cast<bool>(compositor.getVideoMode())) {
 			//Create in a unlocked environment
 			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
 				compositor.getInstance().getVulkan(),
 				compositor.getVideoMode().getFrameDescriptor(),
-				compositor.getDepthStencilFormat().value(),
+				compositor.getDepthStencilFormat(),
 				compositor.getCamera()
 			);
 			if(lock) lock->lock();
@@ -397,26 +397,23 @@ struct CompositorImpl {
 
 		return result;
 	}
-	
-	Utils::Limit<DepthStencilFormat> getDepthStencilFormatCompatibility() const {
-		const auto& compositor = owner.get();
-		return Graphics::Drawtable::getSupportedFormatsDepthStencil(compositor.getInstance().getVulkan());
-	}
+
+
 
 	void recreateCallback(	Compositor& compositor, 
 							const VideoMode& videoMode, 
-							const Utils::Limit<DepthStencilFormat>& depthStencilFormat )
+							DepthStencilFormat depthStencilFormat )
 	{
 		assert(&owner.get() == &compositor);
 
 		if(compositor.isOpen()) {
-			const auto isValid = static_cast<bool>(videoMode) && static_cast<bool>(depthStencilFormat);
+			const auto isValid = static_cast<bool>(videoMode);
 
 			if(opened && isValid) {
 				//Video mode remains valid
 				opened->recreate(
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat.value(),
+					depthStencilFormat,
 					compositor.getCamera()
 				);
 
@@ -431,7 +428,7 @@ struct CompositorImpl {
 				opened = Utils::makeUnique<Open>(
 					compositor.getInstance().getVulkan(),
 					videoMode.getFrameDescriptor(),
-					depthStencilFormat.value(),
+					depthStencilFormat,
 					compositor.getCamera()
 				);
 			}
@@ -445,7 +442,7 @@ struct CompositorImpl {
 		recreateCallback(compositor, videoMode, compositor.getDepthStencilFormat());
 	}
 
-	void depthStencilCallback(RendererBase& base, const Utils::Limit<DepthStencilFormat>& depthStencilFormat) {
+	void depthStencilCallback(RendererBase& base, DepthStencilFormat depthStencilFormat) {
 		auto& compositor = static_cast<Compositor&>(base);
 		recreateCallback(compositor, compositor.getVideoMode(), depthStencilFormat);
 	}
@@ -468,10 +465,10 @@ struct CompositorImpl {
 		const auto& videoMode = compositor.getVideoMode();
 		const auto& depthStencilFormat = compositor.getDepthStencilFormat();
 
-		if(videoMode && depthStencilFormat) {
+		if(static_cast<bool>(videoMode)) {
 			const auto& vulkan = compositor.getInstance().getVulkan();
 			const auto frameDesc = videoMode.getFrameDescriptor();
-			const auto depthStencilFmt = depthStencilFormat.value();
+			const auto depthStencilFmt = depthStencilFormat;
 
 			result = Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
 		}
@@ -495,9 +492,7 @@ private:
  */
 
 Compositor::Compositor(	Instance& instance, 
-						std::string name, 
-						VideoMode videoMode,
-						Utils::Limit<DepthStencilFormat> depthStencil )
+						std::string name )
 	: Utils::Pimpl<CompositorImpl>({}, *this)
 	, ZuazoBase(
 		instance, 
@@ -510,17 +505,14 @@ Compositor::Compositor(	Instance& instance,
 		std::bind(&CompositorImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::update, std::ref(**this)) )
 	, VideoBase(
-		std::move(videoMode),
 		std::bind(&CompositorImpl::videoModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, RendererBase(
-		std::move(depthStencil),
 		std::bind(&CompositorImpl::depthStencilCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::cameraCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::renderPassQueryCallback, std::ref(**this), std::placeholders::_1) )
 	, Signal::SourceLayout<Video>(makeProxy((*this)->videoOut))
 {
 	setVideoModeCompatibility((*this)->getVideoModeCompatibility());
-	setDepthStencilFormatCompatibility((*this)->getDepthStencilFormatCompatibility());
 }
 
 Compositor::Compositor(Compositor&& other) = default;
