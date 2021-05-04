@@ -3,7 +3,7 @@
 #include <zuazo/LayerBase.h>
 #include <zuazo/Graphics/CommandBuffer.h>
 #include <zuazo/Graphics/UniformBuffer.h>
-#include <zuazo/Graphics/Drawtable.h>
+#include <zuazo/Graphics/TargetFramePool.h>
 #include <zuazo/Graphics/CommandBufferPool.h>
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
@@ -50,10 +50,10 @@ struct CompositorImpl {
 		vk::DescriptorSet							descriptorSet;
 		vk::PipelineLayout							pipelineLayout;
 
-		Graphics::Drawtable 						drawtable;
+		Graphics::TargetFramePool 					framePool;
 		Graphics::CommandBufferPool					commandBufferPool;
 		
-		std::vector<vk::ClearValue>					clearValues;
+		Utils::BufferView<const vk::ClearValue>		clearValues;
 
 		Open(	const Graphics::Vulkan& vulkan, 
 				const Graphics::Frame::Descriptor& frameDesc,
@@ -65,7 +65,7 @@ struct CompositorImpl {
 			, descriptorSet(createDescriptorSet(vulkan, *(resources->descriptorPool)))
 			, pipelineLayout(RendererBase::getBasePipelineLayout(vulkan))
 
-			, drawtable(createDrawtable(vulkan, frameDesc, depthStencilFmt))
+			, framePool(createFramePool(vulkan, frameDesc, depthStencilFmt))
 			, commandBufferPool(createCommandBufferPool(vulkan))
 
 			, clearValues(Graphics::RenderPass::getClearValues(depthStencilFmt))
@@ -75,7 +75,6 @@ struct CompositorImpl {
 
 			//Update the contents of the uniforms buffers
 			updateProjectionMatrixUniform(cam);
-			updateColorTransferUniform();
 		}
 
 		~Open() {
@@ -90,7 +89,6 @@ struct CompositorImpl {
 				RECREATE_DRAWTABLE,
 				RECREATE_CLEAR_VALUES,
 				UPDATE_PROJECTION_MATRIX,
-				UPDATE_COLOR_TRANSFER,
 
 				MODIFICATION_COUNT
 			};
@@ -98,13 +96,12 @@ struct CompositorImpl {
 			std::bitset<MODIFICATION_COUNT> modifications;
 
 			modifications.set(RECREATE_DRAWTABLE); //Best guess
-			modifications.set(UPDATE_PROJECTION_MATRIX, drawtable.getFrameDescriptor().calculateSize() != frameDesc.calculateSize());
+			modifications.set(UPDATE_PROJECTION_MATRIX, framePool.getFrameDescriptor().calculateSize() != frameDesc.calculateSize());
 
 			//Evaluate which modifications need to be done
 			if(modifications.test(RECREATE_DRAWTABLE)) {
-				drawtable = Graphics::Drawtable(drawtable.getVulkan(), frameDesc, depthStencilFmt);
+				framePool = createFramePool(framePool.getVulkan(), frameDesc, depthStencilFmt);
 				modifications.set(RECREATE_CLEAR_VALUES); //Best guess
-				modifications.set(UPDATE_COLOR_TRANSFER); //Best guess
 			}
 
 			if(modifications.test(RECREATE_CLEAR_VALUES)) {
@@ -114,10 +111,6 @@ struct CompositorImpl {
 			if(modifications.test(UPDATE_PROJECTION_MATRIX)) {
 				updateProjectionMatrixUniform(cam);
 			}
-
-			if(modifications.test(UPDATE_COLOR_TRANSFER)) {
-				updateColorTransferUniform();
-			}
 		}
 
 		void setCamera(const Compositor::Camera& cam) {
@@ -126,7 +119,7 @@ struct CompositorImpl {
 
 		Video draw(RendererBase& renderer) {
 			//Obtain the viewports and the scissors
-			const auto extent = Graphics::toVulkan(drawtable.getFrameDescriptor().getResolution());
+			const auto extent = Graphics::toVulkan(framePool.getFrameDescriptor().getResolution());
 			const std::array viewports = {
 				vk::Viewport(
 					0.0f, 			0.0f,
@@ -142,7 +135,7 @@ struct CompositorImpl {
 			};
 
 			//Obtain a new frame and command buffer
-			auto result = drawtable.acquireFrame();
+			auto result = framePool.acquireFrame();
 			auto commandBuffer = commandBufferPool.acquireCommandBuffer();
 
 			//Begin the commandbuffer
@@ -198,7 +191,7 @@ struct CompositorImpl {
 		void updateProjectionMatrixUniform(const Compositor::Camera& cam) {
 			resources->uniformBuffer.waitCompletion(vulkan);
 
-			const auto size = drawtable.getFrameDescriptor().calculateSize();
+			const auto size = framePool.getFrameDescriptor().calculateSize();
 			const auto mtx = cam.calculateMatrix(size);
 			resources->uniformBuffer.write(
 				vulkan,
@@ -206,25 +199,6 @@ struct CompositorImpl {
 				&mtx,
 				sizeof(mtx)
 			);
-		}
-
-		void updateColorTransferUniform() {
-			resources->uniformBuffer.waitCompletion(vulkan);
-			
-			const auto outputColorTransfer = drawtable.getOutputColorTransfer();
-			resources->uniformBuffer.write(
-				vulkan,
-				RendererBase::DESCRIPTOR_BINDING_OUTPUT_COLOR_TRANSFER,
-				outputColorTransfer.data(),
-				outputColorTransfer.size()
-			);
-		}
-
-		static Graphics::RenderPass createRenderPass(	const Graphics::Vulkan& vulkan, 
-												const Graphics::Frame::Descriptor& frameDesc,
-												DepthStencilFormat depthStencilFmt ) 
-		{
-			return Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
 		}
 
 		static Graphics::UniformBuffer createUniformBuffer(const Graphics::Vulkan& vulkan) 
@@ -251,11 +225,11 @@ struct CompositorImpl {
 			return vulkan.allocateDescriptorSet(pool, layout).release();
 		}
 
-		static Graphics::Drawtable createDrawtable(	const Graphics::Vulkan& vulkan, 
-													const Graphics::Frame::Descriptor& desc,
-													DepthStencilFormat depthStencilFmt )
+		static Graphics::TargetFramePool createFramePool(	const Graphics::Vulkan& vulkan, 
+															const Graphics::Frame::Descriptor& desc,
+															DepthStencilFormat depthStencilFmt )
 		{
-			return Graphics::Drawtable(
+			return Graphics::TargetFramePool(
 				vulkan,
 				desc,
 				depthStencilFmt
@@ -316,7 +290,7 @@ struct CompositorImpl {
 
 			//Write changes after locking back
 			opened = std::move(newOpened);
-			compositor.setViewportSize(opened->drawtable.getFrameDescriptor().calculateSize());
+			compositor.setViewportSize(opened->framePool.getFrameDescriptor().calculateSize());
 		}
 
 		hasChanged = true; //Signal rendering if needed
@@ -375,11 +349,11 @@ struct CompositorImpl {
 			compositor.getInstance().getResolutionSupport(),
 			Utils::Any<AspectRatio>(),
 			Utils::Any<ColorPrimaries>(),
-			Utils::Any<ColorModel>(),
+			Utils::MustBe<ColorModel>(ColorModel::RGB),
 			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::LINEAR),
 			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
 			Utils::Any<ColorRange>(),
-			Graphics::Drawtable::getSupportedFormats(compositor.getInstance().getVulkan())
+			Graphics::TargetFrame::getSupportedFormats(compositor.getInstance().getVulkan())
 		);
 
 		//sRGB formats
@@ -392,7 +366,7 @@ struct CompositorImpl {
 			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::IEC61966_2_1),
 			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
 			Utils::MustBe<ColorRange>(ColorRange::FULL),
-			Graphics::Drawtable::getSupportedSrgbFormats(compositor.getInstance().getVulkan())
+			Graphics::TargetFrame::getSupportedSrgbFormats(compositor.getInstance().getVulkan())
 		);
 
 		return result;
@@ -418,7 +392,7 @@ struct CompositorImpl {
 				);
 
 				//Update the size
-				compositor.setViewportSize(opened->drawtable.getFrameDescriptor().calculateSize());
+				compositor.setViewportSize(opened->framePool.getFrameDescriptor().calculateSize());
 			} else if(opened && !isValid) {
 				//Video mode is not valid anymore
 				opened.reset();
@@ -456,24 +430,12 @@ struct CompositorImpl {
 		}
 	}
 
-	Graphics::RenderPass renderPassQueryCallback(const RendererBase& base) {
+	const Graphics::RenderPass& renderPassQueryCallback(const RendererBase& base) {
 		const auto& compositor = static_cast<const Compositor&>(base);
 		assert(&owner.get() == &compositor); 
+		static const Graphics::RenderPass NO_RENDER_PASS;
 
-		Graphics::RenderPass result;
-
-		const auto& videoMode = compositor.getVideoMode();
-		const auto& depthStencilFormat = compositor.getDepthStencilFormat();
-
-		if(static_cast<bool>(videoMode)) {
-			const auto& vulkan = compositor.getInstance().getVulkan();
-			const auto frameDesc = videoMode.getFrameDescriptor();
-			const auto depthStencilFmt = depthStencilFormat;
-
-			result = Graphics::Drawtable::getRenderPass(vulkan, frameDesc, depthStencilFmt);
-		}
-
-		return result;
+		return opened ? opened->framePool.getRenderPass() : NO_RENDER_PASS;
 	}
 
 private:

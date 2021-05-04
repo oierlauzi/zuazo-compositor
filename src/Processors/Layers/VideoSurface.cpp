@@ -23,6 +23,15 @@ struct VideoSurfaceImpl {
 			Math::Vec2f texCoord;
 		};
 
+		struct FragmentSpecializationConstants {
+			FragmentSpecializationConstants(uint32_t sampleMode = -1)
+				: sampleMode(sampleMode)
+			{
+			}
+
+			uint32_t sampleMode;
+		};
+
 		enum VertexLayout {
 			VERTEX_LOCATION_POSITION,
 			VERTEX_LOCATION_TEXCOORD,
@@ -79,6 +88,7 @@ struct VideoSurfaceImpl {
 		std::shared_ptr<Resources>							resources;
 		Graphics::Frame::Geometry							geometry;
 		vk::DescriptorSet									descriptorSet;
+		FragmentSpecializationConstants						fragmentSpec;
 
 		vk::DescriptorSetLayout								frameDescriptorSetLayout;
 		vk::PipelineLayout									pipelineLayout;
@@ -95,6 +105,7 @@ struct VideoSurfaceImpl {
 														createDescriptorPool(vulkan) ))
 			, geometry(scalingMode, size)
 			, descriptorSet(createDescriptorSet(vulkan, *resources->descriptorPool))
+			, fragmentSpec()
 			, frameDescriptorSetLayout()
 			, pipelineLayout()
 			, pipeline()
@@ -118,7 +129,7 @@ struct VideoSurfaceImpl {
 		void draw(	Graphics::CommandBuffer& cmd, 
 					const Video& frame, 
 					ScalingFilter filter,
-					Graphics::RenderPass renderPass,
+					const Graphics::RenderPass& renderPass,
 					BlendingMode blendingMode,
 					RenderingLayer renderingLayer ) 
 		{				
@@ -221,17 +232,22 @@ struct VideoSurfaceImpl {
 	private:
 		void configureSampler(	const Graphics::Frame& frame, 
 								ScalingFilter filter,
-								Graphics::RenderPass renderPass,
+								const Graphics::RenderPass& renderPass,
 								BlendingMode blendingMode,
 								RenderingLayer renderingLayer ) 
 		{
 			const auto newDescriptorSetLayout = frame.getDescriptorSetLayout(filter);
-			if(frameDescriptorSetLayout != newDescriptorSetLayout) {
+			const auto sampleMode = frame.getSamplingMode(filter);
+
+			if(	frameDescriptorSetLayout != newDescriptorSetLayout ||
+				fragmentSpec.sampleMode != sampleMode ) 
+			{
 				frameDescriptorSetLayout = newDescriptorSetLayout;
+				fragmentSpec.sampleMode = sampleMode;
 
 				//Recreate stuff
 				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
-				pipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
+				pipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer, fragmentSpec);
 			}
 		}
 
@@ -343,19 +359,27 @@ struct VideoSurfaceImpl {
 		}
 
 		static vk::Pipeline createPipeline(	const Graphics::Vulkan& vulkan,
-													vk::PipelineLayout layout,
-													Graphics::RenderPass renderPass,
-													BlendingMode blendingMode,
-													RenderingLayer renderingLayer )
+											vk::PipelineLayout layout,
+											const Graphics::RenderPass& renderPass,
+											BlendingMode blendingMode,
+											RenderingLayer renderingLayer,
+											const FragmentSpecializationConstants& fragmentSpec )
 		{
+			using FragmentSpecializationData = std::array<uint32_t, sizeof(FragmentSpecializationConstants) / sizeof(uint32_t)>;
 			using Index = std::tuple<	vk::PipelineLayout,
 										vk::RenderPass,
 										BlendingMode,
-										RenderingLayer >;
+										RenderingLayer,
+										FragmentSpecializationData >;
 			static std::unordered_map<Index, const Utils::StaticId, Utils::Hasher<Index>> ids;
 
+			//Copy the specialization data
+			FragmentSpecializationData fragmentSpecData;
+			static_assert(sizeof(fragmentSpecData) >= sizeof(fragmentSpec), "There is not enough space");
+			std::memcpy(fragmentSpecData.data(), &fragmentSpec, sizeof(fragmentSpec));
+
 			//Obtain the id related to the configuration
-			Index index(layout, renderPass.get(), blendingMode, renderingLayer);
+			Index index(layout, renderPass.get(), blendingMode, renderingLayer, fragmentSpecData);
 			const auto& id = ids[index];
 
 			//Try to obtain it from cache
@@ -399,7 +423,7 @@ struct VideoSurfaceImpl {
 						vk::ShaderStageFlagBits::eFragment,				//Shader type
 						fragmentShader,									//Shader handle
 						SHADER_ENTRY_POINT,								//Shader entry point
-						nullptr 										//Specialization
+						nullptr 										//Specialization //TODO specialize
 					),
 				};
 
@@ -543,7 +567,7 @@ struct VideoSurfaceImpl {
 		assert(&owner.get() == &videoSurface);
 		assert(!opened);
 
-		if(videoSurface.getRenderPass() != Graphics::RenderPass()) {
+		if(videoSurface.getRenderPass().get()) {
 			//Create in a unlocked environment
 			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
@@ -630,7 +654,11 @@ struct VideoSurfaceImpl {
 		const auto& lastElement = videoIn.getLastElement();
 
 		if(lastElement) {
-			result = Zuazo::hasAlpha(lastElement->getDescriptor().getColorFormat());
+			if(lastElement->getDescriptor()) {
+				result = Zuazo::hasAlpha(lastElement->getDescriptor()->getColorFormat());
+			} else {
+				result = true; //We dont know, better stay safe than sorry.
+			}
 		} else {
 			//No frame. Nothing will be rendered
 			result = false;
@@ -696,7 +724,7 @@ struct VideoSurfaceImpl {
 		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getBlendingMode());
 	}
 
-	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
+	void renderPassCallback(LayerBase& base, const Graphics::RenderPass& renderPass) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode());
 	}
@@ -738,13 +766,13 @@ struct VideoSurfaceImpl {
 
 private:
 	void recreateCallback(	VideoSurface& videoSurface, 
-							Graphics::RenderPass renderPass,
+							const Graphics::RenderPass& renderPass,
 							BlendingMode blendingMode )
 	{
 		assert(&owner.get() == &videoSurface);
 
 		if(videoSurface.isOpen()) {
-			const bool isValid = 	renderPass != Graphics::RenderPass() &&
+			const bool isValid = 	renderPass.get() &&
 									blendingMode > BlendingMode::NONE ;
 
 			if(opened && isValid) {

@@ -1,5 +1,5 @@
 #include <zuazo/Processors/Layers/BezierCrop.h>
-
+/*
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
 #include <zuazo/Utils/StaticId.h>
@@ -1135,4 +1135,4 @@ float BezierCrop::getLineSmoothness() const {
 	return (*this)->getLineSmoothness();
 }
 
-}
+}*/
