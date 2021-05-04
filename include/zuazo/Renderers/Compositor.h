@@ -9,7 +9,7 @@
 #include <zuazo/Signal/SourceLayout.h>
 #include <zuazo/Math/Transform.h>
 
-namespace Zuazo::Processors {
+namespace Zuazo::Renderers {
 
 struct CompositorImpl;
 class Compositor 

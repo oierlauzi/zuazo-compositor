@@ -1,4 +1,4 @@
-#include <zuazo/Processors/Compositor.h>
+#include <zuazo/Renderers/Compositor.h>
 
 #include <zuazo/LayerBase.h>
 #include <zuazo/Graphics/CommandBuffer.h>
@@ -18,7 +18,7 @@
 #include <tuple>
 #include <bitset>
 
-namespace Zuazo::Processors {
+namespace Zuazo::Renderers {
 
 /*
  * CompositorImpl
@@ -153,7 +153,7 @@ struct CompositorImpl {
 				scissors.front(),
 				clearValues, 
 				vk::SubpassContents::eInline
-			);	
+			);
 
 			//Execute all the command buffers gathered from the layers
 			if(!renderer.getLayers().empty()) {

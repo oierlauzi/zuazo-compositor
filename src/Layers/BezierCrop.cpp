@@ -1,4 +1,4 @@
-#include <zuazo/Processors/Layers/BezierCrop.h>
+#include <zuazo/Layers/BezierCrop.h>
 /*
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
@@ -17,7 +17,7 @@
 #include <memory>
 #include <unordered_map>
 
-namespace Zuazo::Processors::Layers {
+namespace Zuazo::Layers {
 
 struct BezierCropImpl {
 	struct Open {

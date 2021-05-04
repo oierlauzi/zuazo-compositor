@@ -9,109 +9,16 @@
 #include <zuazo/Instance.h>
 #include <zuazo/Player.h>
 #include <zuazo/Modules/Window.h>
-#include <zuazo/Consumers/WindowRenderer.h>
-#include <zuazo/Processors/Compositor.h>
-#include <zuazo/Processors/Layers/VideoSurface.h>
+#include <zuazo/Renderers/Window.h>
+#include <zuazo/Renderers/Compositor.h>
+#include <zuazo/Layers/VideoSurface.h>
 #include <zuazo/Sources/FFmpegClip.h>
+#include <zuazo/Consumers/RendererWrapper.h>
 
 #include <mutex>
 #include <iostream>
 
-static Zuazo::Consumers::WindowRenderer createWindow(Zuazo::Instance& instance) {
-	//Construct the desired parameters
-	const Zuazo::VideoMode videoMode(
-		Zuazo::Utils::MustBe<Zuazo::Rate>(Zuazo::Rate(25, 1)), //Just specify the desired rate
-		Zuazo::Utils::Any<Zuazo::Resolution>(),
-		Zuazo::Utils::Any<Zuazo::AspectRatio>(),
-		Zuazo::Utils::Any<Zuazo::ColorPrimaries>(),
-		Zuazo::Utils::Any<Zuazo::ColorModel>(),
-		Zuazo::Utils::Any<Zuazo::ColorTransferFunction>(),
-		Zuazo::Utils::Any<Zuazo::ColorSubsampling>(),
-		Zuazo::Utils::Any<Zuazo::ColorRange>(),
-		Zuazo::Utils::Any<Zuazo::ColorFormat>()	
-	);
 
-	const Zuazo::Utils::Limit<Zuazo::DepthStencilFormat> depthStencil(
-		Zuazo::Utils::MustBe<Zuazo::DepthStencilFormat>(Zuazo::DepthStencilFormat::NONE) //Not interested in the depth buffer
-	);
-
-	const auto windowSize = Zuazo::Math::Vec2i(1280, 720);
-
-	const auto& monitor = Zuazo::Consumers::WindowRenderer::NO_MONITOR; //Not interested in the full-screen mode
-
-	//Construct the window objects
-	Zuazo::Consumers::WindowRenderer window(
-		instance, 						//Instance
-		"Output Window",				//Layout name
-		videoMode,						//Video mode limits
-		depthStencil,					//Depth buffer limits
-		windowSize,						//Window size (in screen coordinates)
-		monitor							//Monitor for setting fullscreen
-	);
-
-	window.setResizeable(false); //Disable resizeing, as extra care needs to be taken
-	window.open();
-
-	return window;
-}
-
-static Zuazo::Processors::Layers::VideoSurface createOuputLayer(Zuazo::Consumers::WindowRenderer& window) {
-	Zuazo::Processors::Layers::VideoSurface videoSurface(
-		window.getInstance(),
-		"Output Video Surface",
-		&window,
-		window.getVideoMode().getResolutionValue()
-	);
-
-	videoSurface.setScalingMode(Zuazo::ScalingMode::STRETCH);
-	videoSurface.setScalingFilter(Zuazo::ScalingFilter::NEAREST);
-	videoSurface.open();
-
-	return videoSurface;
-}
-
-static Zuazo::Sources::FFmpegClip createVideoClip(Zuazo::Instance& instance, std::string path) {
-	Zuazo::Sources::FFmpegClip videoClip(
-		instance,
-		"Input Video",
-		Zuazo::VideoMode::ANY,
-		std::move(path)
-	);
-	videoClip.setRepeat(Zuazo::Sources::FFmpegClip::Repeat::REPEAT);
-	videoClip.play();
-	videoClip.open();
-
-	return videoClip;
-}
-
-static Zuazo::Processors::Compositor createCompositor(Zuazo::Instance& instance) {
-	//Construct the desired parameters
-	const Zuazo::VideoMode videoMode(
-		Zuazo::Utils::Any<Zuazo::Rate>(),
-		Zuazo::Utils::MustBe<Zuazo::Resolution>(Zuazo::Resolution(1280, 720)),
-		Zuazo::Utils::MustBe<Zuazo::AspectRatio>(Zuazo::AspectRatio(1, 1)),
-		Zuazo::Utils::MustBe<Zuazo::ColorPrimaries>(Zuazo::ColorPrimaries::IEC61966_2_1),
-		Zuazo::Utils::MustBe<Zuazo::ColorModel>(Zuazo::ColorModel::RGB),
-		Zuazo::Utils::MustBe<Zuazo::ColorTransferFunction>(Zuazo::ColorTransferFunction::LINEAR),
-		Zuazo::Utils::MustBe<Zuazo::ColorSubsampling>(Zuazo::ColorSubsampling::RB_444),
-		Zuazo::Utils::MustBe<Zuazo::ColorRange>(Zuazo::ColorRange::FULL),
-		Zuazo::Utils::MustBe<Zuazo::ColorFormat>(Zuazo::ColorFormat::R16fG16fB16fA16f)	
-	);
-
-	const Zuazo::Utils::Limit<Zuazo::DepthStencilFormat> depthStencil(
-		Zuazo::Utils::MustBe<Zuazo::DepthStencilFormat>(Zuazo::DepthStencilFormat::D16) //16 bit integer depth buffer
-	);
-
-	Zuazo::Processors::Compositor compositor(
-		instance,
-		"Compositor",
-		videoMode,
-		depthStencil
-	);
-	compositor.open();
-
-	return compositor;
-}
 
 static Zuazo::Math::Vec2f getRandomVec2f() {
 	return Zuazo::Math::Vec2f(
@@ -119,6 +26,8 @@ static Zuazo::Math::Vec2f getRandomVec2f() {
 		static_cast<float>(rand()) / static_cast<float>(RAND_MAX)
 	);
 }
+
+
 
 int main(int argc, const char** argv) {
 	if(argc != 2) {
@@ -136,22 +45,73 @@ int main(int argc, const char** argv) {
 	Zuazo::Instance instance(std::move(appInfo));
 	std::unique_lock<Zuazo::Instance> lock(instance);
 
-	//Configure the output
-	auto window = createWindow(instance);
-	auto outputLayer = createOuputLayer(window);
-	window.setLayers({outputLayer});
+
+
+	//Configure the output window
+	const auto windowSize = Zuazo::Math::Vec2i(1280, 720);
+	const auto& monitor = Zuazo::Renderers::Window::NO_MONITOR; //Not interested in the full-screen mode
+
+	Zuazo::Consumers::RendererWrapper<Zuazo::Renderers::Window> window(
+		instance,
+		"Output Window",
+		windowSize,
+		monitor
+	);
+
+	window.setVideoModeNegotiationCallback(
+		[] (Zuazo::VideoBase&, const std::vector<Zuazo::VideoMode>& compatibility) -> Zuazo::VideoMode {
+			auto result = compatibility.front();
+			result.setFrameRate(Zuazo::Utils::MustBe<Zuazo::Rate>(result.getFrameRate().highest()));
+			return result;
+		}
+	);
+
+	window.asyncOpen(lock);
+
+
 
 	//Create the input clip
-	auto videoClip = createVideoClip(instance, argv[1]);
+	Zuazo::Sources::FFmpegClip videoClip(
+		instance,
+		"Input Video",
+		std::string(argv[1])
+	);
+	videoClip.setRepeat(Zuazo::Sources::FFmpegClip::Repeat::REPEAT);
+	videoClip.play();
+	videoClip.asyncOpen(lock);
+
 	Zuazo::Player videoClipPlayer(instance, &videoClip);
 	videoClipPlayer.enable();
 
-	//Create the compositor and its layers
-	auto compositor = createCompositor(instance);
-	std::vector<Zuazo::Processors::Layers::VideoSurface> layers;
+
+
+	//Create the compositor and the layer vector
+	std::vector<Zuazo::Layers::VideoSurface> layers;
+	Zuazo::Renderers::Compositor compositor(
+		instance,
+		"Compositor"
+	);
+
+	compositor.setVideoModeNegotiationCallback(
+		[] (Zuazo::VideoBase&, const std::vector<Zuazo::VideoMode>&) -> Zuazo::VideoMode {
+			return Zuazo::VideoMode(
+				Zuazo::Utils::Any<Zuazo::Rate>(),
+				Zuazo::Utils::MustBe<Zuazo::Resolution>(Zuazo::Resolution(1280, 720)),
+				Zuazo::Utils::MustBe<Zuazo::AspectRatio>(Zuazo::AspectRatio(1, 1)),
+				Zuazo::Utils::MustBe<Zuazo::ColorPrimaries>(Zuazo::ColorPrimaries::BT709),
+				Zuazo::Utils::MustBe<Zuazo::ColorModel>(Zuazo::ColorModel::RGB),
+				Zuazo::Utils::MustBe<Zuazo::ColorTransferFunction>(Zuazo::ColorTransferFunction::LINEAR),
+				Zuazo::Utils::MustBe<Zuazo::ColorSubsampling>(Zuazo::ColorSubsampling::RB_444),
+				Zuazo::Utils::MustBe<Zuazo::ColorRange>(Zuazo::ColorRange::FULL),
+				Zuazo::Utils::MustBe<Zuazo::ColorFormat>(Zuazo::ColorFormat::R16fG16fB16fA16f)
+			);
+		}
+	);
+
+	compositor.asyncOpen(lock);
 
 	//Configure keyboard callback for the window
-	const auto keyCallback = [&compositor, &videoClip, &layers] (	Zuazo::Consumers::WindowRenderer&, 
+	const auto keyCallback = [&compositor, &videoClip, &layers] (	Zuazo::Renderers::Window&, 
 																	Zuazo::KeyboardKey key, 
 																	Zuazo::KeyEvent event, 
 																	Zuazo::KeyModifiers)
@@ -163,7 +123,7 @@ int main(int argc, const char** argv) {
 			case Zuazo::KeyboardKey::ENTER:
 				std::cout << "Adding layer #" << compositor.getLayers().size() << std::endl;
 				{
-					const auto size = Zuazo::Math::Vec2f(compositor.getVideoMode().getResolutionValue());
+					const auto size = static_cast<Zuazo::Math::Vec2f>(compositor.getVideoMode().getResolutionValue());
 
 					layers.emplace_back(
 						compositor.getInstance(),
@@ -177,7 +137,7 @@ int main(int argc, const char** argv) {
 					layers.back().open();
 					layers.back() << videoClip;
 
-					const std::vector<Zuazo::Processors::Compositor::LayerRef> newLayers(
+					const std::vector<Zuazo::Renderers::Compositor::LayerRef> newLayers(
 						layers.cbegin(), layers.cend()
 					);
 					compositor.setLayers(newLayers);
@@ -191,7 +151,7 @@ int main(int argc, const char** argv) {
 					layers.pop_back();
 					std::cout << "Removing a layer #" << compositor.getLayers().size() << std::endl;
 
-					const std::vector<Zuazo::Processors::Compositor::LayerRef> newLayers(
+					const std::vector<Zuazo::Renderers::Compositor::LayerRef> newLayers(
 						layers.cbegin(), layers.cend()
 					);
 					compositor.setLayers(newLayers);
@@ -205,13 +165,13 @@ int main(int argc, const char** argv) {
 			}
 		}
 	};
-	window.setKeyboardCallback(keyCallback);
+	window.getRenderer().setKeyboardCallback(keyCallback);
 
 	std::cout << "Compositor's video-mode:" << std::endl;
 	std::cout << compositor.getVideoMode() << std::endl;
 
 	//Route the signals
-	outputLayer << compositor;
+	window << compositor;
 
 	//Done!
 	lock.unlock();

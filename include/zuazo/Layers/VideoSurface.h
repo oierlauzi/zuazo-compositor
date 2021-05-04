@@ -8,7 +8,7 @@
 
 #include <functional>
 
-namespace Zuazo::Processors::Layers {
+namespace Zuazo::Layers {
 
 struct VideoSurfaceImpl;
 class VideoSurface

@@ -1,4 +1,4 @@
-#include <zuazo/Processors/Layers/VideoSurface.h>
+#include <zuazo/Layers/VideoSurface.h>
 
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
@@ -14,7 +14,7 @@
 #include <memory>
 #include <unordered_map>
 
-namespace Zuazo::Processors::Layers {
+namespace Zuazo::Layers {
 
 struct VideoSurfaceImpl {
 	struct Open {
