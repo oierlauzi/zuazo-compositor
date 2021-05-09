@@ -291,6 +291,7 @@ struct CompositorImpl {
 			//Write changes after locking back
 			opened = std::move(newOpened);
 			compositor.setViewportSize(opened->framePool.getFrameDescriptor().calculateSize());
+			compositor.setRenderPass(opened->framePool.getRenderPass().get());
 		}
 
 		hasChanged = true; //Signal rendering if needed
@@ -306,8 +307,10 @@ struct CompositorImpl {
 		auto& compositor = static_cast<Compositor&>(base);
 		assert(&owner.get() == &compositor);
 		
-		//Write changles
+		//Write changes
 		videoOut.reset();
+		compositor.setViewportSize(Math::Vec2f());
+		compositor.setRenderPass(vk::RenderPass());
 		auto oldOpened = std::move(opened);
 
 		//Reset in a unlocked environment
@@ -390,9 +393,6 @@ struct CompositorImpl {
 					depthStencilFormat,
 					compositor.getCamera()
 				);
-
-				//Update the size
-				compositor.setViewportSize(opened->framePool.getFrameDescriptor().calculateSize());
 			} else if(opened && !isValid) {
 				//Video mode is not valid anymore
 				opened.reset();
@@ -406,6 +406,10 @@ struct CompositorImpl {
 					compositor.getCamera()
 				);
 			}
+
+			//Update the size and the renderpass
+			compositor.setViewportSize(opened ? opened->framePool.getFrameDescriptor().calculateSize() : Math::Vec2f());
+			compositor.setRenderPass(opened ? opened->framePool.getRenderPass().get() : vk::RenderPass());
 		}
 
 		hasChanged = true;
@@ -428,14 +432,6 @@ struct CompositorImpl {
 		if(opened) {
 			opened->setCamera(cam);
 		}
-	}
-
-	const Graphics::RenderPass& renderPassQueryCallback(const RendererBase& base) {
-		const auto& compositor = static_cast<const Compositor&>(base);
-		assert(&owner.get() == &compositor); 
-		static const Graphics::RenderPass NO_RENDER_PASS;
-
-		return opened ? opened->framePool.getRenderPass() : NO_RENDER_PASS;
 	}
 
 private:
@@ -470,8 +466,7 @@ Compositor::Compositor(	Instance& instance,
 		std::bind(&CompositorImpl::videoModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, RendererBase(
 		std::bind(&CompositorImpl::depthStencilCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&CompositorImpl::cameraCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
-		std::bind(&CompositorImpl::renderPassQueryCallback, std::ref(**this), std::placeholders::_1) )
+		std::bind(&CompositorImpl::cameraCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, Signal::SourceLayout<Video>(makeProxy((*this)->videoOut))
 {
 	setVideoModeCompatibility((*this)->getVideoModeCompatibility());

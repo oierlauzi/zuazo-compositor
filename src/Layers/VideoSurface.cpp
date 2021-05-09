@@ -129,7 +129,7 @@ struct VideoSurfaceImpl {
 		void draw(	Graphics::CommandBuffer& cmd, 
 					const Video& frame, 
 					ScalingFilter filter,
-					const Graphics::RenderPass& renderPass,
+					vk::RenderPass renderPass,
 					BlendingMode blendingMode,
 					RenderingLayer renderingLayer ) 
 		{				
@@ -232,7 +232,7 @@ struct VideoSurfaceImpl {
 	private:
 		void configureSampler(	const Graphics::Frame& frame, 
 								ScalingFilter filter,
-								const Graphics::RenderPass& renderPass,
+								vk::RenderPass renderPass,
 								BlendingMode blendingMode,
 								RenderingLayer renderingLayer ) 
 		{
@@ -360,7 +360,7 @@ struct VideoSurfaceImpl {
 
 		static vk::Pipeline createPipeline(	const Graphics::Vulkan& vulkan,
 											vk::PipelineLayout layout,
-											const Graphics::RenderPass& renderPass,
+											vk::RenderPass renderPass,
 											BlendingMode blendingMode,
 											RenderingLayer renderingLayer,
 											const FragmentSpecializationConstants& fragmentSpec )
@@ -379,7 +379,7 @@ struct VideoSurfaceImpl {
 			std::memcpy(fragmentSpecData.data(), &fragmentSpec, sizeof(fragmentSpec));
 
 			//Obtain the id related to the configuration
-			Index index(layout, renderPass.get(), blendingMode, renderingLayer, fragmentSpecData);
+			Index index(layout, renderPass, blendingMode, renderingLayer, fragmentSpecData);
 			const auto& id = ids[index];
 
 			//Try to obtain it from cache
@@ -523,7 +523,7 @@ struct VideoSurfaceImpl {
 					&colorBlend,										//Color blending
 					&dynamicState,										//Dynamic states
 					layout,												//Pipeline layout
-					renderPass.get(), 0,								//Renderpasses
+					renderPass, 0,										//Renderpasses
 					nullptr, 0											//Inherit
 				);
 
@@ -567,7 +567,7 @@ struct VideoSurfaceImpl {
 		assert(&owner.get() == &videoSurface);
 		assert(!opened);
 
-		if(videoSurface.getRenderPass().get()) {
+		if(videoSurface.getRenderPass()) {
 			//Create in a unlocked environment
 			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
@@ -724,7 +724,7 @@ struct VideoSurfaceImpl {
 		recreateCallback(videoSurface, videoSurface.getRenderPass(), videoSurface.getBlendingMode());
 	}
 
-	void renderPassCallback(LayerBase& base, const Graphics::RenderPass& renderPass) {
+	void renderPassCallback(LayerBase& base, vk::RenderPass renderPass) {
 		auto& videoSurface = static_cast<VideoSurface&>(base);
 		recreateCallback(videoSurface, renderPass, videoSurface.getBlendingMode());
 	}
@@ -766,13 +766,13 @@ struct VideoSurfaceImpl {
 
 private:
 	void recreateCallback(	VideoSurface& videoSurface, 
-							const Graphics::RenderPass& renderPass,
+							vk::RenderPass renderPass,
 							BlendingMode blendingMode )
 	{
 		assert(&owner.get() == &videoSurface);
 
 		if(videoSurface.isOpen()) {
-			const bool isValid = 	renderPass.get() &&
+			const bool isValid = 	renderPass &&
 									blendingMode > BlendingMode::NONE ;
 
 			if(opened && isValid) {
@@ -798,7 +798,6 @@ private:
 
 VideoSurface::VideoSurface(	Instance& instance,
 							std::string name,
-							const RendererBase* renderer,
 							Math::Vec2f size )
 	: Utils::Pimpl<VideoSurfaceImpl>({}, *this, size)
 	, ZuazoBase(
@@ -811,7 +810,6 @@ VideoSurface::VideoSurface(	Instance& instance,
 		std::bind(&VideoSurfaceImpl::close, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&VideoSurfaceImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
-		renderer,
 		std::bind(&VideoSurfaceImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),

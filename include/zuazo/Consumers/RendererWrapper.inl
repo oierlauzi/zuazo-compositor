@@ -16,17 +16,11 @@ inline RendererWrapper<R>::RendererWrapper(	Instance& instance,
 			auto& wrapper = static_cast<RendererWrapper&>(base);
 			wrapper.m_renderer.open();
 			wrapper.m_surface.open();
-
-			//Update the renderpass
-			wrapper.m_surface.setRenderer(&wrapper.m_renderer);
 		},
 		[] (ZuazoBase& base, std::unique_lock<Instance>& lock) { //Async open callback
 			auto& wrapper = static_cast<RendererWrapper&>(base);
 			wrapper.m_renderer.asyncOpen(lock);
 			wrapper.m_surface.asyncOpen(lock);
-
-			//Update the renderpass
-			wrapper.m_surface.setRenderer(&wrapper.m_renderer);
 		},
 		[] (ZuazoBase& base) { //Close callback
 			auto& wrapper = static_cast<RendererWrapper&>(base);
@@ -43,9 +37,6 @@ inline RendererWrapper<R>::RendererWrapper(	Instance& instance,
 		[] (VideoBase& base, const VideoMode& videoMode) { //VideoMode callback
 			auto& wrapper = static_cast<RendererWrapper&>(base);
 			wrapper.m_renderer.setVideoMode(videoMode);
-
-			//Update the renderpass
-			wrapper.m_surface.setRenderer(&wrapper.m_renderer);
 		} )
 	, VideoScalerBase(
 		[] (VideoScalerBase& base, ScalingMode scalingMode) { //ScalingMode callback
@@ -67,7 +58,6 @@ inline RendererWrapper<R>::RendererWrapper(	Instance& instance,
 	, m_surface(
 		instance,
 		getName() + " - Surface",
-		&m_renderer,
 		m_renderer.getViewportSize() )
 {
 	//HACK this is to avoid a segfault, as the previous initialization

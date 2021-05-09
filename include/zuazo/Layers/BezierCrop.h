@@ -25,7 +25,6 @@ public:
 
 	BezierCrop(	Instance& instance,
 				std::string name,
-				const RendererBase* renderer,
 				Math::Vec2f size,
 				Utils::BufferView<const BezierLoop> crop );
 	BezierCrop(const BezierCrop& other) = delete;

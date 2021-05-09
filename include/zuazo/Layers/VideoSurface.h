@@ -22,7 +22,6 @@ class VideoSurface
 public:
 	VideoSurface(	Instance& instance,
 					std::string name,
-					const RendererBase* renderer,
 					Math::Vec2f size );
 	VideoSurface(const VideoSurface& other) = delete;
 	VideoSurface(VideoSurface&& other);

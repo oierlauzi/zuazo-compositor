@@ -128,7 +128,6 @@ int main(int argc, const char** argv) {
 					layers.emplace_back(
 						compositor.getInstance(),
 						"Compositor Layer" + Zuazo::toString(compositor.getLayers().size()),
-						&compositor,
 						getRandomVec2f() * size / 2.0f
 					);
 					auto transform = layers.back().getTransform();
@@ -138,7 +137,7 @@ int main(int argc, const char** argv) {
 					layers.back() << videoClip;
 
 					const std::vector<Zuazo::Renderers::Compositor::LayerRef> newLayers(
-						layers.cbegin(), layers.cend()
+						layers.begin(), layers.end()
 					);
 					compositor.setLayers(newLayers);
 				}
@@ -152,7 +151,7 @@ int main(int argc, const char** argv) {
 					std::cout << "Removing a layer #" << compositor.getLayers().size() << std::endl;
 
 					const std::vector<Zuazo::Renderers::Compositor::LayerRef> newLayers(
-						layers.cbegin(), layers.cend()
+						layers.begin(), layers.end()
 					);
 					compositor.setLayers(newLayers);
 				}
