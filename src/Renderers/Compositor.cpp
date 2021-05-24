@@ -261,7 +261,7 @@ struct CompositorImpl {
 
 	CompositorImpl(	Compositor& comp )
 		: owner(comp)
-		, videoOut(std::string(Signal::makeOutputName<Video>()), createPullCallback(this))
+		, videoOut(comp, std::string(Signal::makeOutputName<Video>()), createPullCallback(this))
 	{
 	}
 
@@ -270,6 +270,7 @@ struct CompositorImpl {
 
 	void moved(ZuazoBase& base) {
 		owner = static_cast<Compositor&>(base);
+		videoOut.setLayout(base);
 	}
 
 	void open(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
@@ -467,7 +468,7 @@ Compositor::Compositor(	Instance& instance,
 	, RendererBase(
 		std::bind(&CompositorImpl::depthStencilCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&CompositorImpl::cameraCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
-	, Signal::SourceLayout<Video>(makeProxy((*this)->videoOut))
+	, Signal::SourceLayout<Video>((*this)->videoOut.getProxy())
 {
 	setVideoModeCompatibility((*this)->getVideoModeCompatibility());
 }

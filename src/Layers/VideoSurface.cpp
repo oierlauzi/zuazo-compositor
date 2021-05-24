@@ -551,7 +551,7 @@ struct VideoSurfaceImpl {
 
 	VideoSurfaceImpl(VideoSurface& owner, Math::Vec2f size)
 		: owner(owner)
-		, videoIn()
+		, videoIn(owner, std::string(Signal::makeInputName<Video>()))
 		, size(size)
 	{
 	}
@@ -560,6 +560,7 @@ struct VideoSurfaceImpl {
 
 	void moved(ZuazoBase& base) {
 		owner = static_cast<VideoSurface&>(base);
+		videoIn.setLayout(base);
 	}
 
 	void open(ZuazoBase& base, std::unique_lock<Instance>* lock = nullptr) {
@@ -821,7 +822,7 @@ VideoSurface::VideoSurface(	Instance& instance,
 	, VideoScalerBase(
 		std::bind(&VideoSurfaceImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&VideoSurfaceImpl::scalingFilterCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
-	, Signal::ConsumerLayout<Video>(makeProxy((*this)->videoIn))
+	, Signal::ConsumerLayout<Video>((*this)->videoIn.getProxy())
 {
 }
 

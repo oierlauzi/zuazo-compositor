@@ -54,6 +54,7 @@ inline RendererWrapper<R>::RendererWrapper(	Instance& instance,
 		getName() + " - Renderer",
 		std::forward<Params>(params)... )
 	, m_input(
+		*this,
 		std::string(Signal::makeInputName<Video>()) )
 	, m_surface(
 		instance,
