@@ -39,10 +39,9 @@ void main() {
 	vec4 color = frame_texture(SAMPLE_MODE, frame_sampler(2), in_texCoord);
 
 	//Apply the opacity and bezier alpha to it
-	out_color.a *= opacity;
+	color.a *= opacity;
 
 	//Premultiply alpha for outputing
 	out_color = frame_premultiply_alpha(color);
-
 }
  

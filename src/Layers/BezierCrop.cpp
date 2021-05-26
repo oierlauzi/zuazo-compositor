@@ -1,5 +1,5 @@
 #include <zuazo/Layers/BezierCrop.h>
-/*
+
 #include <zuazo/Signal/Input.h>
 #include <zuazo/Signal/Output.h>
 #include <zuazo/Utils/StaticId.h>
@@ -37,6 +37,15 @@ struct BezierCropImpl {
 		};
 
 		using Index = uint16_t;
+
+		struct FragmentSpecializationConstants {
+			FragmentSpecializationConstants(uint32_t sampleMode = -1)
+				: sampleMode(sampleMode)
+			{
+			}
+
+			uint32_t sampleMode;
+		};
 
 		enum VertexLayout {
 			VERTEX_LOCATION_POSITION,
@@ -101,6 +110,7 @@ struct BezierCropImpl {
 
 		std::shared_ptr<Resources>							resources;
 		vk::DescriptorSet									descriptorSet;
+		FragmentSpecializationConstants						fragmentSpec;
 
 		Math::LoopBlinn::OutlineProcessor<float, uint16_t>	outlineProcessor;
 		Graphics::Frame::Geometry							frameGeometry;
@@ -156,7 +166,7 @@ struct BezierCropImpl {
 		void draw(	Graphics::CommandBuffer& cmd, 
 					const Video& frame, 
 					ScalingFilter filter,
-					Graphics::RenderPass renderPass,
+					vk::RenderPass renderPass,
 					BlendingMode blendingMode,
 					RenderingLayer renderingLayer ) 
 		{				
@@ -306,17 +316,22 @@ struct BezierCropImpl {
 	private:
 		void configureSampler(	const Graphics::Frame& frame, 
 								ScalingFilter filter,
-								Graphics::RenderPass renderPass,
+								vk::RenderPass renderPass,
 								BlendingMode blendingMode,
 								RenderingLayer renderingLayer ) 
 		{
 			const auto newDescriptorSetLayout = frame.getDescriptorSetLayout(filter);
-			if(frameDescriptorSetLayout != newDescriptorSetLayout) {
+			const auto sampleMode = frame.getSamplingMode(filter);
+
+			if(	frameDescriptorSetLayout != newDescriptorSetLayout ||
+				fragmentSpec.sampleMode != sampleMode ) 
+			{
 				frameDescriptorSetLayout = newDescriptorSetLayout;
+				fragmentSpec.sampleMode = sampleMode;
 
 				//Recreate stuff
 				pipelineLayout = createPipelineLayout(vulkan, frameDescriptorSetLayout);
-				pipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer);
+				pipeline = createPipeline(vulkan, pipelineLayout, renderPass, blendingMode, renderingLayer, fragmentSpec);
 			}
 		}
 
@@ -545,19 +560,27 @@ struct BezierCropImpl {
 
 		static vk::Pipeline createPipeline(	const Graphics::Vulkan& vulkan,
 											vk::PipelineLayout layout,
-											Graphics::RenderPass renderPass,
+											vk::RenderPass renderPass,
 											BlendingMode blendingMode,
-											RenderingLayer renderingLayer )
+											RenderingLayer renderingLayer,
+											const FragmentSpecializationConstants& fragmentSpec )
 		{
+			using FragmentSpecializationData = std::array<uint32_t, sizeof(FragmentSpecializationConstants) / sizeof(uint32_t)>;
 			using Index = std::tuple<	vk::PipelineLayout,
 										vk::RenderPass,
 										BlendingMode,
-										RenderingLayer >;
+										RenderingLayer,
+										FragmentSpecializationData >;
 			static std::unordered_map<Index, const Utils::StaticId, Utils::Hasher<Index>> ids;
 
+			//Copy the specialization data
+			FragmentSpecializationData fragmentSpecData;
+			static_assert(sizeof(fragmentSpecData) >= sizeof(fragmentSpec), "There is not enough space");
+			std::memcpy(fragmentSpecData.data(), &fragmentSpec, sizeof(fragmentSpec));
+
 			//Obtain the id related to the configuration
-			Index index(layout, renderPass.get(), blendingMode, renderingLayer);
-			const auto& id = ids[index];
+			Index index(layout, renderPass, blendingMode, renderingLayer, fragmentSpecData);
+			const auto& id = ids[index]; //TODO concurrency
 
 			//Try to obtain it from cache
 			auto result = vulkan.createGraphicsPipeline(id);
@@ -586,18 +609,36 @@ struct BezierCropImpl {
 				assert(vertexShader);
 				assert(fragmentShader);
 
+				//Specialization info
+				constexpr std::array<vk::SpecializationMapEntry, 1> fragmentShaderSpecializationMap = {
+					vk::SpecializationMapEntry(
+						0,
+						offsetof(FragmentSpecializationConstants, sampleMode),
+						sizeof(FragmentSpecializationConstants::sampleMode)
+					),
+				};
+
+				const vk::SpecializationInfo fragmentShaderSpecializationInfo(
+					fragmentShaderSpecializationMap.size(), fragmentShaderSpecializationMap.data(),
+					sizeof(fragmentSpec), &fragmentSpec
+				);
+
 				constexpr auto SHADER_ENTRY_POINT = "main";
 				const std::array shaderStages = {
 					vk::PipelineShaderStageCreateInfo(		
 						{},												//Flags
 						vk::ShaderStageFlagBits::eVertex,				//Shader type
 						vertexShader,									//Shader handle
-						SHADER_ENTRY_POINT ),							//Shader entry point
+						SHADER_ENTRY_POINT,								//Shader entry point
+						nullptr 										//Specialization constants
+					),							
 					vk::PipelineShaderStageCreateInfo(		
 						{},												//Flags
 						vk::ShaderStageFlagBits::eFragment,				//Shader type
 						fragmentShader,									//Shader handle
-						SHADER_ENTRY_POINT ),							//Shader entry point
+						SHADER_ENTRY_POINT,								//Shader entry point
+						&fragmentShaderSpecializationInfo 				//Specialization constants
+					),	
 				};
 
 				constexpr std::array vertexBindings = {
@@ -702,7 +743,7 @@ struct BezierCropImpl {
 					&colorBlend,										//Color blending
 					&dynamicState,										//Dynamic states
 					layout,												//Pipeline layout
-					renderPass.get(), 0,								//Renderpasses
+					renderPass, 0,										//Renderpasses
 					nullptr, 0											//Inherit
 				);
 
@@ -736,7 +777,7 @@ struct BezierCropImpl {
 					Math::Vec2f size, 
 					Utils::BufferView<const BezierCrop::BezierLoop> crop )
 		: owner(owner)
-		, videoIn()
+		, videoIn(owner, std::string(Signal::makeInputName<Video>()))
 		, size(size)
 		, crop(crop.cbegin(), crop.cend())
 		, lineColor(0)
@@ -756,7 +797,7 @@ struct BezierCropImpl {
 		assert(&owner.get() == &bezierCrop);
 		assert(!opened);
 
-		if(bezierCrop.getRenderPass() != Graphics::RenderPass()) {
+		if(bezierCrop.getRenderPass()) {
 			//Create in a unlocked environment
 			if(lock) lock->unlock();
 			auto newOpened = Utils::makeUnique<Open>(
@@ -847,12 +888,15 @@ struct BezierCropImpl {
 		const auto& lastElement = videoIn.getLastElement();
 
 		if(lastElement) {
-			result = Zuazo::hasAlpha(lastElement->getDescriptor().getColorFormat());
+			if(lastElement->getDescriptor()) {
+				result = Zuazo::hasAlpha(lastElement->getDescriptor()->getColorFormat());
+			} else {
+				result = true; //We dont know, better stay safe than sorry.
+			}
 		} else {
 			//No frame. Nothing will be rendered
 			result = false;
 		}
-
 
 		return result;
 	}
@@ -913,7 +957,7 @@ struct BezierCropImpl {
 		recreateCallback(bezierCrop, bezierCrop.getRenderPass(), bezierCrop.getBlendingMode());
 	}
 
-	void renderPassCallback(LayerBase& base, Graphics::RenderPass renderPass) {
+	void renderPassCallback(LayerBase& base, vk::RenderPass renderPass) {
 		auto& bezierCrop = static_cast<BezierCrop&>(base);
 		recreateCallback(bezierCrop, renderPass, bezierCrop.getBlendingMode());
 	}
@@ -1022,13 +1066,13 @@ struct BezierCropImpl {
 	
 private:
 	void recreateCallback(	BezierCrop& bezierCrop, 
-							Graphics::RenderPass renderPass,
+							vk::RenderPass renderPass,
 							BlendingMode blendingMode )
 	{
 		assert(&owner.get() == &bezierCrop);
 
 		if(bezierCrop.isOpen()) {
-			const bool isValid = 	renderPass != Graphics::RenderPass() &&
+			const bool isValid = 	renderPass &&
 									blendingMode > BlendingMode::NONE ;
 
 			if(opened && isValid) {
@@ -1054,9 +1098,8 @@ private:
 
 BezierCrop::BezierCrop(	Instance& instance,
 						std::string name,
-						const RendererBase* renderer,
 						Math::Vec2f size,
-						Utils::BufferView<const BezierLoop> crop )
+						Utils::BufferView<const BezierLoop> crop  )
 	: Utils::Pimpl<BezierCropImpl>({}, *this, size, crop)
 	, ZuazoBase(
 		instance, 
@@ -1068,7 +1111,6 @@ BezierCrop::BezierCrop(	Instance& instance,
 		std::bind(&BezierCropImpl::close, std::ref(**this), std::placeholders::_1, nullptr),
 		std::bind(&BezierCropImpl::asyncClose, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
 	, LayerBase(
-		renderer,
 		std::bind(&BezierCropImpl::transformCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::opacityCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::blendingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
@@ -1080,7 +1122,7 @@ BezierCrop::BezierCrop(	Instance& instance,
 	, VideoScalerBase(
 		std::bind(&BezierCropImpl::scalingModeCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2),
 		std::bind(&BezierCropImpl::scalingFilterCallback, std::ref(**this), std::placeholders::_1, std::placeholders::_2) )
-	, Signal::ConsumerLayout<Video>(makeProxy((*this)->videoIn))
+	, Signal::ConsumerLayout<Video>((*this)->videoIn.getProxy())
 {
 }
 
@@ -1135,4 +1177,4 @@ float BezierCrop::getLineSmoothness() const {
 	return (*this)->getLineSmoothness();
 }
 
-}*/
+}

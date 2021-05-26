@@ -380,7 +380,7 @@ struct VideoSurfaceImpl {
 
 			//Obtain the id related to the configuration
 			Index index(layout, renderPass, blendingMode, renderingLayer, fragmentSpecData);
-			const auto& id = ids[index];
+			const auto& id = ids[index]; //TODO concurrency
 
 			//Try to obtain it from cache
 			auto result = vulkan.createGraphicsPipeline(id);
@@ -409,6 +409,20 @@ struct VideoSurfaceImpl {
 				assert(vertexShader);
 				assert(fragmentShader);
 
+				//Specialization info
+				constexpr std::array<vk::SpecializationMapEntry, 1> fragmentShaderSpecializationMap = {
+					vk::SpecializationMapEntry(
+						0,
+						offsetof(FragmentSpecializationConstants, sampleMode),
+						sizeof(FragmentSpecializationConstants::sampleMode)
+					),
+				};
+
+				const vk::SpecializationInfo fragmentShaderSpecializationInfo(
+					fragmentShaderSpecializationMap.size(), fragmentShaderSpecializationMap.data(),
+					sizeof(fragmentSpec), &fragmentSpec
+				);
+
 				constexpr auto SHADER_ENTRY_POINT = "main";
 				const std::array shaderStages = {
 					vk::PipelineShaderStageCreateInfo(		
@@ -423,7 +437,7 @@ struct VideoSurfaceImpl {
 						vk::ShaderStageFlagBits::eFragment,				//Shader type
 						fragmentShader,									//Shader handle
 						SHADER_ENTRY_POINT,								//Shader entry point
-						nullptr 										//Specialization //TODO specialize
+						&fragmentShaderSpecializationInfo				//Specialization
 					),
 				};
 
