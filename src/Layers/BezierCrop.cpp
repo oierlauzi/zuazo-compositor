@@ -1073,7 +1073,7 @@ private:
 
 		if(bezierCrop.isOpen()) {
 			const bool isValid = 	renderPass &&
-									blendingMode > BlendingMode::NONE ;
+									blendingMode > BlendingMode::none ;
 
 			if(opened && isValid) {
 				//It remains valid

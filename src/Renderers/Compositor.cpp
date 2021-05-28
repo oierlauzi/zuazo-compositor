@@ -353,9 +353,9 @@ struct CompositorImpl {
 			compositor.getInstance().getResolutionSupport(),
 			Utils::Any<AspectRatio>(),
 			Utils::Any<ColorPrimaries>(),
-			Utils::MustBe<ColorModel>(ColorModel::RGB),
-			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::LINEAR),
-			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
+			Utils::MustBe<ColorModel>(ColorModel::rgb),
+			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::linear),
+			Utils::MustBe<ColorSubsampling>(ColorSubsampling::rb444),
 			Utils::Any<ColorRange>(),
 			Graphics::TargetFrame::getSupportedFormats(compositor.getInstance().getVulkan())
 		);
@@ -366,10 +366,10 @@ struct CompositorImpl {
 			compositor.getInstance().getResolutionSupport(),
 			Utils::Any<AspectRatio>(),
 			Utils::Any<ColorPrimaries>(),
-			Utils::MustBe<ColorModel>(ColorModel::RGB),
-			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::IEC61966_2_1),
-			Utils::MustBe<ColorSubsampling>(ColorSubsampling::RB_444),
-			Utils::MustBe<ColorRange>(ColorRange::FULL),
+			Utils::MustBe<ColorModel>(ColorModel::rgb),
+			Utils::MustBe<ColorTransferFunction>(ColorTransferFunction::iec61966_2_1),
+			Utils::MustBe<ColorSubsampling>(ColorSubsampling::rb444),
+			Utils::MustBe<ColorRange>(ColorRange::full),
 			Graphics::TargetFrame::getSupportedSrgbFormats(compositor.getInstance().getVulkan())
 		);
 
