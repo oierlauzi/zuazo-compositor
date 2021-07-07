@@ -70,7 +70,7 @@ inline RendererWrapper<R>::RendererWrapper(	Instance& instance,
 	Signal::Layout::registerPad(m_input.getInput());
 
 	//Configure the renderer
-	m_renderer.setDepthStencilFormat(DepthStencilFormat::NONE);
+	m_renderer.setDepthStencilFormat(DepthStencilFormat::none);
 	m_renderer.setLayers({ m_surface });
 
 	//Route the input
